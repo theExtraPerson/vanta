@@ -6,6 +6,7 @@ import { ScreenHeader } from "@/components/shell/ScreenHeader";
 import { Pill } from "@/components/ui/primitives";
 import { signOutAction } from "@/lib/actions";
 import { isSessionAdmin } from "@/lib/admin/data";
+import { getTelegramLinks } from "@/lib/links";
 import { brand } from "@/lib/brand";
 import { shortDate } from "@/lib/format";
 
@@ -14,7 +15,7 @@ export const metadata: Metadata = { title: "Account" };
 export default async function SettingsPage() {
   const data = await getDashboard();
   if (!data) return null;
-  const admin = await isSessionAdmin();
+  const [admin, links] = await Promise.all([isSessionAdmin(), getTelegramLinks()]);
 
   return (
     <div className="pb-8">
@@ -82,7 +83,7 @@ export default async function SettingsPage() {
         <section className="surface rounded-2xl p-4">
           <h2 className="font-display text-[13px] font-bold text-white">Support</h2>
           <p className="mt-2 text-[11.5px] leading-relaxed text-mist">
-            Customer service {brand.supportHandle} · Telegram {brand.community.replace("https://", "")}
+            Customer service {links.handle} · Telegram {links.community.replace("https://", "")}
             <br />
             {brand.supportEmail} · {brand.address}
           </p>

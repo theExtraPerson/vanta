@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { brand } from "@/lib/brand";
+import type { TelegramLinks } from "@/lib/links";
 
 /**
  * Floating Telegram entry points.
@@ -45,8 +46,15 @@ function Plane({ className = "" }: { className?: string }) {
   );
 }
 
-export function FloatingTelegram() {
+/** Channels default to the compiled brand and defer to the desk's live links. */
+export function FloatingTelegram({ links }: { links?: TelegramLinks }) {
   const [open, setOpen] = useState(false);
+
+  const channels = CHANNELS.map((c) =>
+    c.key === "support"
+      ? { ...c, href: links?.support ?? c.href, handle: links?.handle ?? c.handle }
+      : { ...c, href: links?.community ?? c.href },
+  );
 
   return (
     <div
@@ -55,7 +63,7 @@ export function FloatingTelegram() {
     >
       <div className="flex w-full max-w-[430px] flex-col items-end gap-2 px-4">
         {open
-          ? CHANNELS.map((c, i) => (
+          ? channels.map((c, i) => (
               <a
                 key={c.key}
                 href={c.href}

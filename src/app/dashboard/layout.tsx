@@ -6,6 +6,7 @@ import { TabBar } from "@/components/shell/TabBar";
 import { FloatingTelegram } from "@/components/shell/FloatingTelegram";
 import { LedgerNotice } from "@/components/dashboard/LedgerNotice";
 import { getDashboard } from "@/lib/data";
+import { getTelegramLinks } from "@/lib/links";
 import { getSessionUser } from "@/lib/supabase/server";
 
 export const metadata: Metadata = {
@@ -15,7 +16,7 @@ export const metadata: Metadata = {
 };
 
 export default async function DashboardLayout({ children }: { children: React.ReactNode }) {
-  const data = await getDashboard();
+  const [data, links] = await Promise.all([getDashboard(), getTelegramLinks()]);
 
   if (!data) {
     // Distinguish "not signed in" from "signed in but the ledger RPC is not
@@ -31,7 +32,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
         bottom={<TabBar />}
       >
         <LedgerNotice />
-        <FloatingTelegram />
+        <FloatingTelegram links={links} />
       </PhoneShell>
     );
   }
@@ -42,7 +43,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
       bottom={<TabBar />}
     >
       <main className="min-h-full pb-2">{children}</main>
-      <FloatingTelegram />
+      <FloatingTelegram links={links} />
     </PhoneShell>
   );
 }

@@ -52,13 +52,73 @@ as $$
   );
 $$;
 
-create or replace function public.vanta_within_withdrawal_window()
-returns boolean
+-- One readable setting, or its published default. Security definer so it can
+-- see platform_settings (created by admin.sql); if the table is not there yet
+-- — or the stored value is malformed — the default silently wins, so the
+-- money RPCs behave exactly like the hardcoded rules before admin.sql ran.
+create or replace function public.vanta_setting(p_key text, p_fallback jsonb)
+returns jsonb
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+declare
+  v jsonb;
+begin
+  select value into v from public.platform_settings where key = p_key;
+  return coalesce(v, p_fallback);
+exception when others then
+  return p_fallback;
+end;
+$$;
+
+-- Text form of a setting, falling back when unset or not a string.
+create or replace function public.vanta_setting_text(p_key text, p_fallback text)
+returns text
 language sql
 stable
 as $$
-  select (public.vanta_local_now()::time >= time '09:00'
-          and public.vanta_local_now()::time <  time '22:00');
+  select coalesce(nullif(public.vanta_setting(p_key, to_jsonb(p_fallback)) #>> '{}', ''), p_fallback);
+$$;
+
+-- Numeric form, falling back when the stored value is not a number.
+create or replace function public.vanta_setting_number(p_key text, p_fallback numeric)
+returns numeric
+language plpgsql
+stable
+as $$
+begin
+  return public.vanta_setting_text(p_key, p_fallback::text)::numeric;
+exception when others then
+  return p_fallback;
+end;
+$$;
+
+-- Withdrawals are only taken inside the desk window, now admin-editable via
+-- platform_settings (default 09:00–22:00 Kampala).
+create or replace function public.vanta_within_withdrawal_window()
+returns boolean
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+declare
+  v_now   time := public.vanta_local_now()::time;
+  v_open  time;
+  v_close time;
+begin
+  v_open  := coalesce(public.vanta_setting_text('withdrawal_opens_at', '09:00')::time, time '09:00');
+  v_close := coalesce(public.vanta_setting_text('withdrawal_closes_at', '22:00')::time, time '22:00');
+
+  if v_close <= v_open then
+    return v_now >= v_open; -- window wraps past midnight: open from closes-at back to opens-at
+  end if;
+  return v_now >= v_open and v_now < v_close;
+exception when others then
+  return v_now >= time '09:00' and v_now < time '22:00';
+end;
 $$;
 
 -- The published rules, readable by the app so screens never hard-code them.
@@ -66,21 +126,39 @@ $$;
 -- cannot call directly.
 create or replace function public.vanta_rules()
 returns jsonb
-language sql
+language plpgsql
 stable
 security definer
 set search_path = public
 as $$
-  select jsonb_build_object(
+declare
+  v_min_dep numeric;
+  v_min_wd  numeric;
+begin
+  v_min_dep := public.vanta_setting_number('min_deposit', 2000);
+  v_min_wd  := public.vanta_setting_number('min_withdrawal', 5000);
+
+  return jsonb_build_object(
     'currency',              'UGX',
     'timezone',              'Africa/Kampala',
-    'min_deposit',           2000,
-    'min_withdrawal',        5000,
-    'earnings_mature_at',    '22:00',
-    'withdrawal_opens_at',   '09:00',
-    'withdrawal_closes_at',  '22:00',
+    'min_deposit',           v_min_dep,
+    'min_withdrawal',        v_min_wd,
+    'earnings_mature_at',    public.vanta_setting_text('earnings_mature_at', '22:00'),
+    'withdrawal_opens_at',   public.vanta_setting_text('withdrawal_opens_at', '09:00'),
+    'withdrawal_closes_at',  public.vanta_setting_text('withdrawal_closes_at', '22:00'),
     'withdrawals_open',      public.vanta_within_withdrawal_window()
   );
+exception when others then
+  -- a malformed setting must never take the app's rule panel down
+  return jsonb_build_object(
+    'currency', 'UGX', 'timezone', 'Africa/Kampala',
+    'min_deposit', 2000, 'min_withdrawal', 5000,
+    'earnings_mature_at', '22:00',
+    'withdrawal_opens_at', '09:00', 'withdrawal_closes_at', '22:00',
+    'withdrawals_open', public.vanta_local_now()::time >= time '09:00'
+                         and public.vanta_local_now()::time < time '22:00'
+  );
+end;
 $$;
 
 -- Any way a Ugandan writes their number → the gateway's 2567XXXXXXXX form.
@@ -106,6 +184,9 @@ revoke all on function public.vanta_local_now() from public, anon, authenticated
 revoke all on function public.vanta_maturity_at(timestamptz, integer) from public, anon, authenticated;
 revoke all on function public.vanta_within_withdrawal_window() from public, anon, authenticated;
 revoke all on function public.vanta_normalize_msisdn(text) from public, anon, authenticated;
+revoke all on function public.vanta_setting(text, jsonb) from public, anon, authenticated;
+revoke all on function public.vanta_setting_text(text, text) from public, anon, authenticated;
+revoke all on function public.vanta_setting_number(text, numeric) from public, anon, authenticated;
 
 grant execute on function public.vanta_rules() to anon, authenticated;
 
@@ -496,6 +577,7 @@ declare
   v_number text;
   v_dep    public.deposits%rowtype;
   v_ref    text;
+  v_min    numeric;
 begin
   if v_uid is null then
     raise exception 'NOT_AUTHENTICATED';
@@ -503,8 +585,10 @@ begin
 
   perform public.vanta_assert_not_banned(v_uid);
 
-  if p_amount is null or p_amount < 2000 then
-    raise exception 'MIN_DEPOSIT: the minimum deposit is 2,000 UGX';
+  -- floor and ceiling come from the desk settings when the admin has moved them
+  v_min := public.vanta_setting_number('min_deposit', 2000);
+  if p_amount is null or p_amount < v_min then
+    raise exception 'MIN_DEPOSIT: the minimum deposit is % UGX', to_char(v_min, 'FM999,999,999');
   end if;
 
   -- mobile money has no cents, and the gateway is called with the same integer
@@ -798,6 +882,7 @@ declare
   v_balance numeric(14, 2);
   v_wd      public.withdrawals%rowtype;
   v_ref     text;
+  v_min     numeric;
 begin
   if v_uid is null then
     raise exception 'NOT_AUTHENTICATED';
@@ -805,8 +890,9 @@ begin
 
   perform public.vanta_assert_not_banned(v_uid);
 
-  if p_amount is null or p_amount < 5000 then
-    raise exception 'MIN_WITHDRAWAL: the minimum withdrawal is 5,000 UGX';
+  v_min := public.vanta_setting_number('min_withdrawal', 5000);
+  if p_amount is null or p_amount < v_min then
+    raise exception 'MIN_WITHDRAWAL: the minimum withdrawal is % UGX', to_char(v_min, 'FM999,999,999');
   end if;
 
   if p_amount <> floor(p_amount) then
@@ -814,7 +900,9 @@ begin
   end if;
 
   if not public.vanta_within_withdrawal_window() then
-    raise exception 'WITHDRAWAL_WINDOW: withdrawals open from 09:00 to 22:00 (Africa/Kampala)';
+    raise exception 'WITHDRAWAL_WINDOW: withdrawals open from % to % (Africa/Kampala)',
+      public.vanta_setting_text('withdrawal_opens_at', '09:00'),
+      public.vanta_setting_text('withdrawal_closes_at', '22:00');
   end if;
 
   v_number := public.vanta_normalize_msisdn(p_msisdn);

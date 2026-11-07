@@ -70,7 +70,15 @@ insert into public.platform_settings (key, value) values
   ('platform_frozen', 'false'::jsonb),
   ('freeze_message',  '"Deposits, activations, claims and withdrawals are paused for maintenance."'::jsonb),
   ('referral_rate_l1', '0.17'::jsonb),
-  ('referral_rate_l2', '0.01'::jsonb)
+  ('referral_rate_l2', '0.01'::jsonb),
+  ('min_deposit',          '2000'::jsonb),
+  ('min_withdrawal',       '5000'::jsonb),
+  ('withdrawal_opens_at',  '"09:00"'::jsonb),
+  ('withdrawal_closes_at', '"22:00"'::jsonb),
+  ('earnings_mature_at',   '"22:00"'::jsonb),
+  ('telegram_community',   '"https://t.me/M"'::jsonb),
+  ('telegram_support',     '"https://t.me/Micron"'::jsonb),
+  ('telegram_handle',      '"@Micron"'::jsonb)
 on conflict (key) do nothing;
 
 -- ── Guard + helpers ─────────────────────────────────────────────────────────
@@ -205,6 +213,29 @@ revoke all on function public.vanta_admin_guard()             from public, anon,
 revoke all on function public.vanta_admin_log(text, text, text, text, jsonb) from public, anon, authenticated;
 grant  execute on function public.vanta_is_admin_self()       to authenticated;
 grant  execute on function public.vanta_admin_rules()         to authenticated;
+
+-- ── Public Telegram channels, admin-editable in the desk settings ─────────
+create or replace function public.vanta_links()
+returns jsonb
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+begin
+  return jsonb_build_object(
+    'community', public.vanta_setting_text('telegram_community', 'https://t.me/M'),
+    'support',   public.vanta_setting_text('telegram_support', 'https://t.me/Micron'),
+    'handle',    public.vanta_setting_text('telegram_handle', '@Micron'));
+exception when others then
+  return jsonb_build_object(
+    'community', 'https://t.me/M',
+    'support', 'https://t.me/Micron',
+    'handle', '@Micron');
+end;
+$$;
+
+grant execute on function public.vanta_links() to anon, authenticated;
 
 -- ============================================================================
 --  READ: the whole dashboard in one round-trip (mirrors vanta_dashboard()).

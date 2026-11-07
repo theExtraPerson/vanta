@@ -372,6 +372,33 @@ export function SettingsSection({
       </div>
 
       <div>
+        <SectionLabel>Money rules</SectionLabel>
+        <div className="grid grid-cols-2 gap-2">
+          <MoneySetting label="Minimum deposit" keyName="min_deposit" value={Number(settings.min_deposit ?? 2000)} />
+          <MoneySetting label="Minimum withdrawal" keyName="min_withdrawal" value={Number(settings.min_withdrawal ?? 5000)} />
+          <TimeSetting label="Withdrawals open at" keyName="withdrawal_opens_at" value={String(settings.withdrawal_opens_at ?? "09:00")} />
+          <TimeSetting label="Withdrawals close at" keyName="withdrawal_closes_at" value={String(settings.withdrawal_closes_at ?? "22:00")} />
+          <TimeSetting label="Earnings mature at" keyName="earnings_mature_at" value={String(settings.earnings_mature_at ?? "22:00")} />
+        </div>
+        <p className="mt-2 text-[10px] leading-relaxed text-slate-deep">
+          Times are on the platform clock (Africa/Kampala). Changes apply to the next request — the
+          money RPCs read these live.
+        </p>
+      </div>
+
+      <div>
+        <SectionLabel>Telegram channels</SectionLabel>
+        <div className="space-y-2">
+          <UrlSetting label="Official community group" keyName="telegram_community" value={String(settings.telegram_community ?? "https://t.me/M")} />
+          <UrlSetting label="Customer service chat" keyName="telegram_support" value={String(settings.telegram_support ?? "https://t.me/Micron")} />
+          <TextSetting label="Support handle" keyName="telegram_handle" value={String(settings.telegram_handle ?? "@Micron")} />
+        </div>
+        <p className="mt-2 text-[10px] leading-relaxed text-slate-deep">
+          Feed the floating Telegram buttons and the in-app support line.
+        </p>
+      </div>
+
+      <div>
         <SectionLabel>Freeze message</SectionLabel>
         <TextSetting
           label="Shown to members while the platform is frozen"
@@ -381,7 +408,7 @@ export function SettingsSection({
       </div>
 
       <div>
-        <SectionLabel>Money rules (from rpc.sql)</SectionLabel>
+        <SectionLabel>Effective rules (as the app sees them)</SectionLabel>
         <div className="surface rounded-xl px-3.5 py-3">
           <dl className="space-y-1.5">
             <KeyValue label="Minimum deposit">{ugx(rules.min_deposit)}</KeyValue>
@@ -435,6 +462,45 @@ function NumberSetting({ label, keyName, value }: { label: string; keyName: stri
         return Number.isFinite(n) && n >= 0 && n <= 1 ? n : null;
       }}
       hint="0–1 (e.g. 0.17 = 17%)"
+    />
+  );
+}
+
+function MoneySetting({ label, keyName, value }: { label: string; keyName: string; value: number }) {
+  return (
+    <InlineSetting
+      label={label}
+      keyName={keyName}
+      initial={String(value)}
+      parse={(raw) => {
+        const n = Number(raw);
+        return Number.isInteger(n) && n >= 100 ? n : null;
+      }}
+      hint="whole UGX, ≥ 100"
+    />
+  );
+}
+
+function TimeSetting({ label, keyName, value }: { label: string; keyName: string; value: string }) {
+  return (
+    <InlineSetting
+      label={label}
+      keyName={keyName}
+      initial={value}
+      parse={(raw) => (/^([01]\d|2[0-3]):[0-5]\d$/.test(raw) ? raw : null)}
+      hint="24h HH:MM (Kampala)"
+    />
+  );
+}
+
+function UrlSetting({ label, keyName, value }: { label: string; keyName: string; value: string }) {
+  return (
+    <InlineSetting
+      label={label}
+      keyName={keyName}
+      initial={value}
+      parse={(raw) => (/^https:\/\/\S+$/.test(raw) ? raw : null)}
+      hint="full https:// link"
     />
   );
 }

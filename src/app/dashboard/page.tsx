@@ -10,6 +10,7 @@ import {
 } from "@/components/dashboard/widgets";
 import { NewsWire } from "@/components/dashboard/NewsCarousel";
 import { SignalBoard } from "@/components/dashboard/SignalBoard";
+import { InstallAppTile } from "@/components/shell/InstallAppTile";
 import { getMarketFeed, marketFeedsEnabled } from "@/lib/market/feed";
 import { ButtonLink, Pill } from "@/components/ui/primitives";
 import { plans } from "@/lib/plans";
@@ -87,7 +88,7 @@ export default async function OverviewPage() {
         pending={data.wallet.pending_withdrawals}
       />
 
-      <div className="grid grid-cols-4 gap-2">
+      <div className="grid grid-cols-5 gap-1.5">
         {actions.map((a) => (
           <Link
             key={a.href}
@@ -106,11 +107,13 @@ export default async function OverviewPage() {
             >
               {icons[a.icon]}
             </svg>
-            <span className="font-display text-[9.5px] font-bold tracking-[0.1em] text-mist uppercase">
+            <span className="font-display text-[9px] font-bold tracking-[0.06em] text-mist uppercase">
               {a.label}
             </span>
           </Link>
         ))}
+        {/* Fifth door: PWA install (see app/manifest.ts) */}
+        <InstallAppTile />
       </div>
 
       <div className="grid grid-cols-2 gap-3">
