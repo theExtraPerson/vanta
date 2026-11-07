@@ -3,6 +3,7 @@ import type { Metadata } from "next";
 import { AppBar } from "@/components/shell/AppBar";
 import { PhoneShell } from "@/components/shell/PhoneShell";
 import { TabBar } from "@/components/shell/TabBar";
+import { FloatingTelegram } from "@/components/shell/FloatingTelegram";
 import { LedgerNotice } from "@/components/dashboard/LedgerNotice";
 import { getDashboard } from "@/lib/data";
 import { getSessionUser } from "@/lib/supabase/server";
@@ -30,6 +31,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
         bottom={<TabBar />}
       >
         <LedgerNotice />
+        <FloatingTelegram />
       </PhoneShell>
     );
   }
@@ -40,6 +42,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
       bottom={<TabBar />}
     >
       <main className="min-h-full pb-2">{children}</main>
+      <FloatingTelegram />
     </PhoneShell>
   );
 }

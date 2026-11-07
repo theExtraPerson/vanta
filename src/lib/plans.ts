@@ -3,11 +3,11 @@
  * in the official product broadcast.
  *
  *   PRODUCT      | PRICE      | DAILY EARNING | DAYS | EARNINGS | PAYOUT AT MATURITY
- *   VINTA Core   | UGX 20,000 | UGX 3,000     | 3    | 9,000    | UGX 29,000
- *   VINTA Nova   | UGX 50,000 | UGX 9,000     | 4    | 36,000   | UGX 86,000
- *   VINTA Pulse  | UGX 150,000| UGX 20,000    | 5    | 100,000  | UGX 250,000
- *   VINTA max    | UGX 200,000| UGX 30,000    | 6    | 180,000  | UGX 380,000
- *   VINTAgold    | UGX 500,000| UGX 80,000    | 7    | 560,000  | UGX 1,060,000
+ *   VANTA Core   | UGX 20,000 | UGX 3,000     | 3    | 9,000    | UGX 29,000
+ *   VANTA Nova   | UGX 50,000 | UGX 9,000     | 4    | 36,000   | UGX 86,000
+ *   VANTA Pulse  | UGX 150,000| UGX 20,000    | 5    | 100,000  | UGX 250,000
+ *   VANTA max    | UGX 200,000| UGX 30,000    | 6    | 180,000  | UGX 380,000
+ *   VANTAgold    | UGX 500,000| UGX 80,000    | 7    | 560,000  | UGX 1,060,000
  */
 
 export type Plan = {
@@ -30,7 +30,7 @@ export type Plan = {
 const raw = [
   {
     slug: "core",
-    name: "VINTA Core",
+    name: "VANTA Core",
     amount: 20_000,
     daily: 3_000,
     days: 3,
@@ -40,7 +40,7 @@ const raw = [
   },
   {
     slug: "nova",
-    name: "VINTA Nova",
+    name: "VANTA Nova",
     amount: 50_000,
     daily: 9_000,
     days: 4,
@@ -49,7 +49,7 @@ const raw = [
   },
   {
     slug: "pulse",
-    name: "VINTA Pulse",
+    name: "VANTA Pulse",
     amount: 150_000,
     daily: 20_000,
     days: 5,
@@ -59,7 +59,7 @@ const raw = [
   },
   {
     slug: "max",
-    name: "VINTA max",
+    name: "VANTA max",
     amount: 200_000,
     daily: 30_000,
     days: 6,
@@ -68,7 +68,7 @@ const raw = [
   },
   {
     slug: "gold",
-    name: "VINTAgold",
+    name: "VANTAgold",
     amount: 500_000,
     daily: 80_000,
     days: 7,

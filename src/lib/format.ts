@@ -26,6 +26,30 @@ export function pct(rate: number, digits = 0): string {
   return `${(rate * 100).toFixed(digits)}%`;
 }
 
+/**
+ * USD price for the market widgets. Keeps small-cap precision without ever
+ * printing "$0.00": >=10k drops decimals, >=100 pairs, >=1 four places,
+ * anything smaller goes to four significant digits.
+ */
+export function usd(value: number): string {
+  if (!Number.isFinite(value)) return "$—";
+  const abs = Math.abs(value);
+  if (abs >= 10_000) return `$${value.toLocaleString("en-US", { maximumFractionDigits: 0 })}`;
+  if (abs >= 100) return `$${value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  if (abs >= 1) return `$${value.toFixed(4)}`;
+  return `$${value.toPrecision(4)}`;
+}
+
+/**
+ * Signed percentage. The reference platform rendered falling coins as
+ * "▼ 0.36%", which reads like a missing minus sign - keep the sign explicit.
+ */
+export function signedPct(value: number, digits = 2): string {
+  if (!Number.isFinite(value)) return "—";
+  const abs = Math.abs(value).toFixed(digits);
+  return `${value >= 0 ? "+" : "−"}${abs}%`;
+}
+
 export function shortDate(input: string | Date | null | undefined): string {
   if (!input) return "—";
   const d = typeof input === "string" ? new Date(input) : input;
@@ -41,6 +65,21 @@ export function dateTime(input: string | Date | null | undefined): string {
     day: "2-digit",
     month: "short",
   })} · ${d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}`;
+}
+
+/** ISO instant → "22:00" on the platform clock (Uganda by default). */
+export function clockTime(
+  input: string | Date | null | undefined,
+  timeZone = "Africa/Kampala",
+): string {
+  if (!input) return "—";
+  const d = typeof input === "string" ? new Date(input) : input;
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleTimeString("en-GB", {
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone,
+  });
 }
 
 export function daysLeft(endsAt: string | Date | null | undefined): number {

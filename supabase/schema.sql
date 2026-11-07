@@ -151,34 +151,109 @@ create unique index if not exists transactions_reference_key on public.transacti
   where reference is not null;
 
 -- ── Deposits ────────────────────────────────────────────────────────────────
+-- A deposit is a SHASHURA collection (POST /requestToPay): the row is created
+-- first so the gateway reference is derived from its id, the payer then approves
+-- the mobile money prompt, and the ledger is credited by the signed callback
+-- (`vanta_handle_gateway_event`) or by an enquiry poll.
+--   status: pending      row created, prompt not pushed (or manual/bank deposit)
+--           awaiting_pin prompt delivered, payer has not approved
+--           credited     money confirmed and added to the wallet
+--           failed       declined / timed out / cancelled
+--           rejected     written off by an operator
+--           approved     legacy manual path, kept for historical rows
 create table if not exists public.deposits (
   id         uuid primary key default gen_random_uuid(),
   user_id    uuid not null references public.profiles (id) on delete cascade,
-  amount     numeric(14, 2) not null check (amount >= 20000),
+  amount     numeric(14, 2) not null check (amount >= 2000),
   method     text not null default 'MTN MoMo',
-  reference  text not null,
-  status     text not null default 'pending' check (status in ('pending', 'approved', 'rejected')),
+  msisdn     text,
+  reference  text not null default '',
+  tid        text,
+  network    text,
+  gateway_state text,
+  failure_code    text,
+  failure_message text,
+  charge     numeric(14, 2),
+  net_amount numeric(14, 2),
+  status     text not null default 'pending' check (status in (
+               'pending', 'awaiting_pin', 'credited', 'failed', 'rejected', 'approved')),
   reviewed_at timestamptz,
   reviewed_by uuid references auth.users (id),
+  settled_at timestamptz,
   created_at timestamptz not null default now()
 );
 
 create index if not exists deposits_user_idx on public.deposits (user_id, created_at desc);
+create index if not exists deposits_status_idx on public.deposits (status, created_at desc);
+create unique index if not exists deposits_reference_key on public.deposits (reference)
+  where reference <> '';
 
 -- ── Withdrawals ─────────────────────────────────────────────────────────────
+-- A withdrawal is a SHASHURA disbursement (POST /disburse). The wallet is held
+-- at request time, the payout is pushed, and the callback either confirms it or
+-- releases the hold back to the wallet.
+--   pending    row created, payout not pushed
+--   processing gateway accepted it, awaiting the network (MTN)
+--   paid       confirmed settled
+--   failed     declined — the hold was returned to the wallet
+--   rejected   written off by an operator
+--   processed  legacy manual path, kept for historical rows
 create table if not exists public.withdrawals (
   id          uuid primary key default gen_random_uuid(),
   user_id     uuid not null references public.profiles (id) on delete cascade,
-  amount      numeric(14, 2) not null check (amount >= 20000),
+  amount      numeric(14, 2) not null check (amount >= 5000),
   method      text not null default 'MTN MoMo',
   destination text not null,
-  status      text not null default 'pending' check (status in ('pending', 'paid', 'rejected')),
+  msisdn      text,
+  reference   text not null default '',
+  tid         text,
+  network     text,
+  gateway_state text,
+  failure_code    text,
+  failure_message text,
+  charge      numeric(14, 2),
+  status      text not null default 'pending' check (status in (
+                'pending', 'processing', 'paid', 'failed', 'rejected', 'processed')),
   processed_at timestamptz,
   processed_by uuid references auth.users (id),
+  settled_at  timestamptz,
   created_at  timestamptz not null default now()
 );
 
 create index if not exists withdrawals_user_idx on public.withdrawals (user_id, created_at desc);
+create index if not exists withdrawals_status_idx on public.withdrawals (status, created_at desc);
+create unique index if not exists withdrawals_reference_key on public.withdrawals (reference)
+  where reference <> '';
+
+-- ── Gateway event log ───────────────────────────────────────────────────────
+-- Every callback and every enquiry poll is written here before it touches the
+-- ledger. The unique key (tid, type, status) is what makes settlement
+-- idempotent: retries from the gateway, or a poll that races a callback, settle
+-- money exactly once.
+create table if not exists public.payment_events (
+  id             uuid primary key default gen_random_uuid(),
+  tid            text not null,
+  external_ref   text,
+  event          text not null default 'transaction.finalized',
+  type           text not null check (type in ('COLLECTION', 'DISBURSEMENT')),
+  status         text not null check (status in ('PENDING', 'SUCCESSFUL', 'FAILED')),
+  environment    text,
+  amount         numeric(14, 2),
+  charge         numeric(14, 2),
+  net_amount     numeric(14, 2),
+  msisdn         text,
+  network        text,
+  failure_code   text,
+  failure_message text,
+  payload        jsonb not null default '{}'::jsonb,
+  applied        boolean not null default false,
+  deposit_id     uuid references public.deposits (id) on delete set null,
+  withdrawal_id  uuid references public.withdrawals (id) on delete set null,
+  created_at     timestamptz not null default now(),
+  unique (tid, type, status)
+);
+
+create index if not exists payment_events_ref_idx on public.payment_events (external_ref);
 
 -- ── Referral commissions ────────────────────────────────────────────────────
 create table if not exists public.referral_commissions (
@@ -204,6 +279,10 @@ alter table public.transactions         enable row level security;
 alter table public.deposits             enable row level security;
 alter table public.withdrawals          enable row level security;
 alter table public.referral_commissions enable row level security;
+alter table public.payment_events       enable row level security;
+
+-- payment_events has no read policy on purpose: it is written by the
+-- security-definer RPCs and only ever readable with the service role key.
 
 drop policy if exists "plans are public read" on public.plans;
 create policy "plans are public read" on public.plans
@@ -321,3 +400,55 @@ drop trigger if exists on_auth_user_created on auth.users;
 create trigger on_auth_user_created
   after insert on auth.users
   for each row execute function public.handle_new_user();
+
+-- ── Upgrade path ───────────────────────────────────────────────────────────
+-- Idempotent changes for databases that were created before the SHASHURA
+-- gateway integration: the extra gateway columns, and the new minimums
+-- (2,000 UGX deposit / 5,000 UGX withdrawal) replacing the old 20,000 checks.
+alter table public.deposits    add column if not exists msisdn          text;
+alter table public.deposits    add column if not exists tid             text;
+alter table public.deposits    add column if not exists network         text;
+alter table public.deposits    add column if not exists gateway_state   text;
+alter table public.deposits    add column if not exists failure_code    text;
+alter table public.deposits    add column if not exists failure_message text;
+alter table public.deposits    add column if not exists charge          numeric(14, 2);
+alter table public.deposits    add column if not exists net_amount      numeric(14, 2);
+alter table public.deposits    add column if not exists settled_at      timestamptz;
+alter table public.deposits    alter column reference set default '';
+alter table public.deposits    alter column reference set not null;
+
+alter table public.withdrawals add column if not exists msisdn          text;
+alter table public.withdrawals add column if not exists tid             text;
+alter table public.withdrawals add column if not exists network         text;
+alter table public.withdrawals add column if not exists gateway_state   text;
+alter table public.withdrawals add column if not exists failure_code    text;
+alter table public.withdrawals add column if not exists failure_message text;
+alter table public.withdrawals add column if not exists charge          numeric(14, 2);
+alter table public.withdrawals add column if not exists settled_at      timestamptz;
+alter table public.withdrawals add column if not exists reference       text default '' not null;
+
+-- Gateway status vocabularies and the new minimums supersede the checks the old
+-- tables were created with. Constraint names follow Postgres' automatic
+-- <table>_<column>_check pattern, so dropping if exists covers both a fresh
+-- install (created above) and an upgrade of an existing database.
+do $$
+begin
+  alter table public.deposits    drop constraint if exists deposits_status_check;
+  alter table public.deposits    drop constraint if exists deposits_amount_check;
+  alter table public.withdrawals drop constraint if exists withdrawals_status_check;
+  alter table public.withdrawals drop constraint if exists withdrawals_amount_check;
+
+  alter table public.deposits
+    add constraint deposits_amount_check check (amount >= 2000);
+  alter table public.deposits
+    add constraint deposits_status_check check (status in (
+      'pending', 'awaiting_pin', 'credited', 'failed', 'rejected', 'approved'));
+
+  alter table public.withdrawals
+    add constraint withdrawals_amount_check check (amount >= 5000);
+  alter table public.withdrawals
+    add constraint withdrawals_status_check check (status in (
+      'pending', 'processing', 'paid', 'failed', 'rejected', 'processed'));
+end;
+$$;
+

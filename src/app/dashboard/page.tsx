@@ -8,9 +8,13 @@ import {
   TxRow,
   WalletCard,
 } from "@/components/dashboard/widgets";
+import { NewsWire } from "@/components/dashboard/NewsCarousel";
+import { SignalBoard } from "@/components/dashboard/SignalBoard";
+import { getMarketFeed, marketFeedsEnabled } from "@/lib/market/feed";
 import { ButtonLink, Pill } from "@/components/ui/primitives";
 import { plans } from "@/lib/plans";
-import { ugx } from "@/lib/format";
+import { clockTime, ugx } from "@/lib/format";
+import { earningsMatureAt } from "@/lib/supabase/config";
 
 const actions = [
   { href: "/dashboard/wallet?tab=deposit", label: "Deposit", icon: "down" },
@@ -50,7 +54,9 @@ const icons: Record<string, React.ReactNode> = {
 };
 
 export default async function OverviewPage() {
-  const data = await getDashboard();
+  // The ledger is the page; the market widgets ride along on the same render
+  // and answer from cache, so a slow wire cannot slow the dashboard down.
+  const [data, feed] = await Promise.all([getDashboard(), getMarketFeed()]);
   if (!data) return null;
 
   const active = data.investments.filter((i) => i.status === "active");
@@ -59,6 +65,8 @@ export default async function OverviewPage() {
 
   return (
     <div className="space-y-5 px-4 pt-3 pb-8">
+      {marketFeedsEnabled ? <NewsWire initial={feed} /> : null}
+
       <div className="flex items-end justify-between gap-3">
         <div>
           <p className="micro-label">Long-term platform</p>
@@ -149,6 +157,8 @@ export default async function OverviewPage() {
         </div>
       </section>
 
+      {marketFeedsEnabled ? <SignalBoard initial={feed} /> : null}
+
       <section>
         <div className="mb-2 flex items-center justify-between">
           <h3 className="font-display text-[13px] font-bold tracking-[0.1em] text-white uppercase">
@@ -164,20 +174,30 @@ export default async function OverviewPage() {
 
         {active.length ? (
           <div className="space-y-3">
-            {active.map((inv) => (
-              <div key={inv.id} className="space-y-2">
-                <InvestmentCard inv={inv} />
-                <ClaimButton
-                  investmentId={inv.id}
-                  label={`Credit today's ${ugx(inv.daily_return)}`}
-                />
-              </div>
-            ))}
+            {active.map((inv) => {
+              const maturesAt = inv.next_maturity_at ? new Date(inv.next_maturity_at).getTime() : 0;
+              const waiting = maturesAt > Date.now();
+
+              return (
+                <div key={inv.id} className="space-y-2">
+                  <InvestmentCard inv={inv} />
+                  <ClaimButton
+                    investmentId={inv.id}
+                    label={`Credit day ${Math.min(inv.days_paid + 1, inv.duration_days)} · ${ugx(inv.daily_return)}`}
+                  />
+                  <p className="text-[10.5px] leading-relaxed text-slate-deep">
+                    {waiting
+                      ? `This credit matures at ${clockTime(inv.next_maturity_at)} (Kampala time) — every day's earning unlocks at ${earningsMatureAt}.`
+                      : `Matured at ${clockTime(inv.next_maturity_at)} — credit it whenever you like.`}
+                  </p>
+                </div>
+              );
+            })}
           </div>
         ) : (
           <EmptyState
             title="No active cycles yet"
-            body="Activate one of the five VANTAFINTECH plans and your first daily earning lands within 24 hours."
+            body="Activate one of the five VANTAFINTECH plans and the first daily earning matures the same evening at 22:00 (Kampala time)."
             cta={
               <ButtonLink href="/dashboard/plans" variant="primary" size="sm">
                 Choose a plan

@@ -18,15 +18,16 @@ export const brand = {
   domain: "vantatech.online",
   registerUrl: "https://www.vantatech.online",
   supportHandle: "@Micron",
+  supportTelegram: "https://t.me/Micron",
   supportEmail: "support@vantatech.online",
   supportPhone: "+256 700 000 000",
   address: "Kampala, Uganda",
-  community: "https://t.me/vantafintech",
+  community: "https://t.me/M",
   socials: {
     x: "https://x.com",
     facebook: "https://facebook.com",
     instagram: "https://instagram.com",
-    telegram: "https://t.me/vantafintech",
+    telegram: "https://t.me/M",
     whatsapp: "https://whatsapp.com",
   },
 } as const;

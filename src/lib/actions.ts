@@ -5,13 +5,27 @@ import { redirect } from "next/navigation";
 import {
   emailForUsername,
   isSupabaseConfigured,
+  minDeposit,
+  minWithdrawal,
   normalizeUsername,
   parseReferralCode,
   usernamePattern,
+  withdrawalClosesAt,
+  withdrawalOpensAt,
 } from "@/lib/supabase/config";
 import { createAdminSupabase } from "@/lib/supabase/admin";
 import { createServerSupabase } from "@/lib/supabase/server";
 import { planBySlug } from "@/lib/plans";
+import { ugx } from "@/lib/format";
+import {
+  disburse,
+  GatewayError,
+  isPaymentsConfigured,
+  normalizeMsisdn,
+  requestToPay,
+  stateFromGateway,
+} from "@/lib/payments/shashura";
+import { reconcileOpenPayments } from "@/lib/payments/reconcile";
 
 export type ActionState = {
   ok: boolean;
@@ -22,8 +36,81 @@ export type ActionState = {
 const NOT_CONFIGURED =
   "The Vanta ledger is not connected. Set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY, then run supabase/schema.sql and supabase/rpc.sql.";
 
+const NO_GATEWAY =
+  "The mobile money provider is not configured on this deployment (SHASHURA_CLIENT_ID / SHASHURA_CLIENT_SECRET).";
+
 function fail(message: string, field?: string): ActionState {
   return { ok: false, message, field };
+}
+
+/**
+ * The RPCs raise named exceptions (`MIN_DEPOSIT: …`). Turn the code into a
+ * sentence an investor can act on, and point at the field that caused it.
+ */
+const DB_HINTS: Record<string, { message: string; field?: string }> = {
+  NOT_AUTHENTICATED: { message: "Your session expired — sign in again." },
+  PROFILE_NOT_FOUND: { message: "We could not find your wallet. Please contact support." },
+  MIN_DEPOSIT: { message: `Minimum top-up is ${ugx(minDeposit)}.`, field: "amount" },
+  MIN_WITHDRAWAL: { message: `Minimum withdrawal is ${ugx(minWithdrawal)}.`, field: "amount" },
+  MAX_DEPOSIT: { message: `One top-up can be at most ${ugx(5_000_000)}.`, field: "amount" },
+  ODD_AMOUNT: { message: "Enter a whole number of shillings.", field: "amount" },
+  MSISDN_INVALID: {
+    message: "Enter a valid mobile money number (077…, 070…, or 25677…).",
+    field: "phone",
+  },
+  WITHDRAWAL_WINDOW: {
+    message: `Withdrawals open from ${withdrawalOpensAt} to ${withdrawalClosesAt} (EAT).`,
+  },
+  DEPOSIT_PENDING: {
+    message: "Your last top-up is still waiting for approval on your phone.",
+  },
+  INSUFFICIENT_BALANCE: { message: "Not enough balance in your wallet.", field: "amount" },
+  INSUFFICIENT_FUNDS: {
+    message: "The mobile money account does not have enough balance for this amount.",
+    field: "amount",
+  },
+  EARNING_NOT_DUE: { message: "This earning matures at 22:00 EAT — come back after that." },
+  INVESTMENT_COMPLETED: { message: "This cycle is already complete." },
+  INVESTMENT_NOT_FOUND: { message: "We could not find that plan." },
+  PLAN_NOT_FOUND: { message: "That plan is no longer on offer." },
+  ACCOUNT_RESTRICTED: {
+    message: "This account is restricted. Please contact customer service.",
+  },
+  FORBIDDEN: { message: "That movement is handled by our operations desk." },
+};
+
+function fromDbError(raw: string, fallback?: string): ActionState {
+  const text = (raw ?? "").trim();
+  const head = text.split(":")[0]?.trim().toUpperCase() ?? "";
+  const hint = DB_HINTS[head];
+
+  if (hint) return fail(hint.message, hint.field);
+  // detail only, or a raw driver message
+  const detail = text.split(":").slice(1).join(":").trim();
+  return fail(detail || text || fallback || "Something went wrong — please try again.");
+}
+
+/** Calls a service-role RPC; a missing key is a deployment problem, not a user error. */
+async function rpcAsAdmin(fn: string, args: Record<string, unknown>): Promise<string | null> {
+  const admin = createAdminSupabase();
+  if (!admin) {
+    console.error(`[vanta] SUPABASE_SERVICE_ROLE_KEY missing — cannot run ${fn}`);
+    return null;
+  }
+
+  const { data, error } = await admin.rpc(fn, args);
+  if (error) {
+    console.error(`[vanta] ${fn} failed:`, error.message);
+    return null;
+  }
+
+  return typeof data === "string" ? data : null;
+}
+
+function revalidateWallet() {
+  revalidatePath("/dashboard");
+  revalidatePath("/dashboard/wallet");
+  revalidatePath("/dashboard/transactions");
 }
 
 /* ── Auth ────────────────────────────────────────────────────────────────── */
@@ -173,75 +260,250 @@ export async function investAction(
   const { error } = await supabase.rpc("vanta_create_investment", {
     p_plan_slug: plan.slug,
   });
-  if (error) return fail(error.message);
+  if (error) return fromDbError(error.message);
 
-  revalidatePath("/dashboard");
-  revalidatePath("/dashboard/plans");
-  revalidatePath("/dashboard/transactions");
+  revalidateWallet();
   return {
     ok: true,
-    message: `${plan.name} activated — ${plan.daily.toLocaleString()} will credit daily for ${plan.days} days.`,
+    message: `${plan.name} activated — ${plan.daily.toLocaleString()} will credit daily for ${plan.days} days, each day maturing at 22:00 EAT.`,
   };
 }
 
+/**
+ * Deposit = SHASHURA collection. The RPC books the pending movement and gives
+ * us the gateway reference, /requestToPay pushes a PIN prompt to the payer's
+ * phone, and the wallet is credited later by the signed callback (or by
+ * reconcilePaymentsAction when no callback has reached this deployment).
+ */
 export async function depositAction(
   _prev: ActionState | undefined,
   formData: FormData,
 ): Promise<ActionState> {
   const amount = Number(formData.get("amount"));
+  const phone = String(formData.get("phone") ?? "").trim();
   const method = String(formData.get("method") ?? "MTN MoMo");
-  const reference = String(formData.get("reference") ?? "").trim();
 
-  if (!Number.isFinite(amount) || amount < 20_000) {
-    return fail("Minimum deposit is UGX 20,000.", "amount");
+  if (!Number.isFinite(amount) || amount < minDeposit) {
+    return fail(`Minimum top-up is ${ugx(minDeposit)}.`, "amount");
   }
-  if (reference.length < 4) return fail("Enter the mobile money transaction ID.", "reference");
+  if (!normalizeMsisdn(phone)) {
+    return fail("Enter the mobile money number to charge.", "phone");
+  }
 
   const supabase = await createServerSupabase();
   if (!supabase) return fail(NOT_CONFIGURED);
 
-  const { error } = await supabase.rpc("vanta_request_deposit", {
-    p_amount: amount,
+  const { data, error } = await supabase.rpc("vanta_start_deposit", {
+    p_amount: Math.round(amount),
+    p_msisdn: phone,
     p_method: method,
-    p_reference: reference,
   });
-  if (error) return fail(error.message);
+  if (error) return fromDbError(error.message);
 
-  revalidatePath("/dashboard");
-  revalidatePath("/dashboard/wallet");
-  revalidatePath("/dashboard/transactions");
-  return { ok: true, message: "Deposit submitted — the desk confirms within 30 minutes." };
+  const request = data as unknown as {
+    deposit_id: string;
+    reference: string;
+    amount: number;
+    msisdn: string;
+  };
+
+  if (!isPaymentsConfigured) {
+    await rpcAsAdmin("vanta_set_deposit_gateway", {
+      p_deposit_id: request.deposit_id,
+      p_tid: null,
+      p_state: "TF",
+      p_code: "NOT_CONFIGURED",
+      p_message: "Payment provider keys are missing on this deployment.",
+    });
+    revalidateWallet();
+    return fail(NO_GATEWAY);
+  }
+
+  try {
+    const pushed = await requestToPay({
+      msisdn: request.msisdn,
+      amount: request.amount,
+      reference: request.reference,
+    });
+
+    const state = stateFromGateway(pushed.state);
+    await rpcAsAdmin("vanta_set_deposit_gateway", {
+      p_deposit_id: request.deposit_id,
+      p_tid: pushed.tid,
+      p_state: state,
+      p_code: null,
+      p_message: null,
+    });
+    revalidateWallet();
+
+    if (state === "TS") {
+      return { ok: true, message: `${ugx(request.amount)} received — your wallet is credited.` };
+    }
+
+    return {
+      ok: true,
+      message: `Dial prompt sent to ${request.msisdn}. Enter your mobile money PIN to pay ${ugx(
+        request.amount,
+      )} — the wallet credits the moment it clears.`,
+    };
+  } catch (err) {
+    const gateway = err instanceof GatewayError ? err : null;
+
+    await rpcAsAdmin("vanta_set_deposit_gateway", {
+      p_deposit_id: request.deposit_id,
+      p_tid: null,
+      p_state: "TF",
+      p_code: gateway?.code ?? "GATEWAY_ERROR",
+      p_message: gateway?.message ?? "The payment provider did not answer.",
+    });
+    revalidateWallet();
+
+    return fail(
+      gateway
+        ? gateway.message
+        : "We could not reach the payment provider. Nothing was charged — please try again.",
+    );
+  }
 }
 
+/**
+ * Withdrawal = SHASHURA disbursement. The RPC checks the rules (5,000 UGX
+ * minimum, 09:00–22:00 EAT window) and holds the money, then /disburse pushes
+ * it. Airtel settles on the response; MTN settles on the callback, and any
+ * failure puts the hold back in the wallet.
+ */
 export async function withdrawAction(
   _prev: ActionState | undefined,
   formData: FormData,
 ): Promise<ActionState> {
   const amount = Number(formData.get("amount"));
+  const phone = String(formData.get("phone") ?? formData.get("destination") ?? "").trim();
   const method = String(formData.get("method") ?? "MTN MoMo");
-  const destination = String(formData.get("destination") ?? "").trim();
 
-  if (!Number.isFinite(amount) || amount < 20_000) {
-    return fail("Minimum withdrawal is UGX 20,000.", "amount");
+  if (!Number.isFinite(amount) || amount < minWithdrawal) {
+    return fail(`Minimum withdrawal is ${ugx(minWithdrawal)}.`, "amount");
   }
-  if (destination.replace(/\D/g, "").length < 9) {
-    return fail("Enter the mobile money or account number.", "destination");
+  if (!normalizeMsisdn(phone)) {
+    return fail("Enter the mobile money number to pay into.", "phone");
   }
 
   const supabase = await createServerSupabase();
   if (!supabase) return fail(NOT_CONFIGURED);
 
-  const { error } = await supabase.rpc("vanta_request_withdrawal", {
-    p_amount: amount,
+  const { data, error } = await supabase.rpc("vanta_start_withdrawal", {
+    p_amount: Math.round(amount),
+    p_msisdn: phone,
     p_method: method,
-    p_destination: destination,
   });
-  if (error) return fail(error.message);
+  if (error) return fromDbError(error.message);
 
-  revalidatePath("/dashboard");
-  revalidatePath("/dashboard/wallet");
-  revalidatePath("/dashboard/transactions");
-  return { ok: true, message: "Withdrawal queued — settlement within one working day." };
+  const request = data as unknown as {
+    withdrawal_id: string;
+    reference: string;
+    amount: number;
+    msisdn: string;
+  };
+
+  if (!isPaymentsConfigured) {
+    await rpcAsAdmin("vanta_set_withdrawal_gateway", {
+      p_withdrawal_id: request.withdrawal_id,
+      p_tid: null,
+      p_state: "TF",
+      p_code: "NOT_CONFIGURED",
+      p_message: "Payment provider keys are missing on this deployment.",
+      p_charge: null,
+    });
+    revalidateWallet();
+    return fail(NO_GATEWAY);
+  }
+
+  try {
+    const pushed = await disburse({
+      msisdn: request.msisdn,
+      amount: request.amount,
+      reference: request.reference,
+      remarks: `Vanta withdrawal ${request.reference}`,
+    });
+
+    const state = stateFromGateway(pushed.status);
+    await rpcAsAdmin("vanta_set_withdrawal_gateway", {
+      p_withdrawal_id: request.withdrawal_id,
+      p_tid: pushed.tid,
+      p_state: state,
+      p_code: null,
+      p_message: null,
+      p_charge: pushed.charge ?? null,
+    });
+    revalidateWallet();
+
+    if (state === "TS") {
+      return {
+        ok: true,
+        message: `${ugx(request.amount)} paid out to ${request.msisdn}.`,
+      };
+    }
+
+    return {
+      ok: true,
+      message: `${ugx(request.amount)} is on its way to ${request.msisdn}. ${
+        pushed.message ?? "We confirm it as soon as the network replies."
+      }`,
+    };
+  } catch (err) {
+    const gateway = err instanceof GatewayError ? err : null;
+
+    await rpcAsAdmin("vanta_set_withdrawal_gateway", {
+      p_withdrawal_id: request.withdrawal_id,
+      p_tid: null,
+      p_state: "TF",
+      p_code: gateway?.code ?? "GATEWAY_ERROR",
+      p_message: gateway?.message ?? "The payment provider did not answer.",
+      p_charge: null,
+    });
+    revalidateWallet();
+
+    return fail(
+      gateway
+        ? `${gateway.message} The amount stayed in your wallet.`
+        : "We could not reach the payment provider. Your balance is untouched — please try again.",
+    );
+  }
+}
+
+/**
+ * "Check status": asks the gateway for the final state of this investor's open
+ * movements and settles whatever it can through the same RPC the callback uses.
+ * It is also the only way to confirm money on a machine the gateway cannot
+ * reach, so the wallet screen always offers it.
+ */
+export async function reconcilePaymentsAction(): Promise<ActionState> {
+  const supabase = await createServerSupabase();
+  if (!supabase) return fail(NOT_CONFIGURED);
+  if (!isPaymentsConfigured) return fail(NO_GATEWAY);
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return fail("Your session expired — sign in again.");
+
+  const summary = await reconcileOpenPayments({ userId: user.id });
+  revalidateWallet();
+
+  if (!summary.checked) {
+    return { ok: true, message: "Nothing is waiting on the network right now." };
+  }
+
+  const parts = [
+    summary.settled ? `${summary.settled} confirmed` : "",
+    summary.failed ? `${summary.failed} declined` : "",
+  ].filter(Boolean);
+
+  if (parts.length) return { ok: true, message: `Wallet updated — ${parts.join(" and ")}.` };
+
+  return {
+    ok: true,
+    message: "Still waiting for the network — approve the prompt on your phone if it is on screen.",
+  };
 }
 
 export async function claimEarningsAction(
@@ -257,10 +519,9 @@ export async function claimEarningsAction(
   const { data, error } = await supabase.rpc("vanta_claim_earnings", {
     p_investment_id: investmentId,
   });
-  if (error) return fail(error.message);
+  if (error) return fromDbError(error.message);
 
-  revalidatePath("/dashboard");
-  revalidatePath("/dashboard/transactions");
+  revalidateWallet();
   return { ok: true, message: `Credited ${data ?? "today's earning"} to your wallet.` };
 }
 

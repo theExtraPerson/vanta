@@ -5,6 +5,7 @@ import { ProfileForm } from "@/components/dashboard/forms";
 import { ScreenHeader } from "@/components/shell/ScreenHeader";
 import { Pill } from "@/components/ui/primitives";
 import { signOutAction } from "@/lib/actions";
+import { isSessionAdmin } from "@/lib/admin/data";
 import { brand } from "@/lib/brand";
 import { shortDate } from "@/lib/format";
 
@@ -13,6 +14,7 @@ export const metadata: Metadata = { title: "Account" };
 export default async function SettingsPage() {
   const data = await getDashboard();
   if (!data) return null;
+  const admin = await isSessionAdmin();
 
   return (
     <div className="pb-8">
@@ -29,7 +31,17 @@ export default async function SettingsPage() {
         </section>
 
         <section className="surface rounded-2xl p-4">
-          <h2 className="font-display text-[13px] font-bold text-white">Account</h2>
+          <div className="flex items-start justify-between gap-3">
+            <h2 className="font-display text-[13px] font-bold text-white">Account</h2>
+            {admin && (
+              <Link
+                href="/admin"
+                className="btn btn-gold h-7 shrink-0 px-2.5 text-[9.5px]"
+              >
+                Admin
+              </Link>
+            )}
+          </div>
           <dl className="mt-2.5 space-y-2 text-[11.5px]">
             <div className="flex items-center justify-between gap-3">
               <dt className="text-slate-deep">Username</dt>

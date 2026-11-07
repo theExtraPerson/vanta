@@ -1,10 +1,21 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { getDashboard } from "@/lib/data";
-import { DepositForm, WithdrawForm } from "@/components/dashboard/forms";
+import {
+  DepositForm,
+  ReconcileButton,
+  WithdrawForm,
+} from "@/components/dashboard/forms";
 import { TxRow } from "@/components/dashboard/widgets";
 import { ScreenHeader } from "@/components/shell/ScreenHeader";
 import { ugx } from "@/lib/format";
+import {
+  earningsMatureAt,
+  minDeposit,
+  minWithdrawal,
+  withdrawalClosesAt,
+  withdrawalOpensAt,
+} from "@/lib/supabase/config";
 
 export const metadata: Metadata = { title: "Wallet" };
 
@@ -14,21 +25,19 @@ const tabs = [
   { key: "history", label: "History" },
 ] as const;
 
-const channels = [
+/** How a top-up actually moves, now that the provider pushes the prompt. */
+const collectSteps = [
   {
-    name: "MTN MoMo",
-    detail: "0772 000 000 · Vanta Collections",
-    note: "Use your username as the reason, then paste the SMS ID below.",
+    title: "Choose an amount",
+    detail: `From ${ugx(minDeposit)} · MTN MoMo and Airtel Money.`,
   },
   {
-    name: "Airtel Money",
-    detail: "0752 000 000 · Vanta Collections",
-    note: "Same-day confirmation, 7 days a week.",
+    title: "Approve the prompt",
+    detail: "A mobile money PIN request appears on your phone within seconds.",
   },
   {
-    name: "Bank transfer",
-    detail: "Stanbic Bank · 9030012345678",
-    note: "Bank deposits reconcile within one working day.",
+    title: "Wallet credits itself",
+    detail: "The provider confirms the payment and your balance updates automatically.",
   },
 ];
 
@@ -42,6 +51,11 @@ export default async function WalletPage({
 
   const { tab } = await searchParams;
   const view = tab === "withdraw" ? "withdraw" : tab === "history" ? "history" : "deposit";
+
+  const rules = data.payments?.rules;
+  const withdrawalsOpen = rules?.withdrawals_open ?? true;
+  const openDeposits = data.payments?.awaiting_deposit ?? [];
+  const openPayouts = data.payments?.awaiting_payout ?? [];
 
   const payouts = data.transactions.filter(
     (t) => t.type === "withdrawal" || t.type === "capital_return" || t.type === "deposit",
@@ -86,6 +100,35 @@ export default async function WalletPage({
           </div>
         </div>
 
+        {(openDeposits.length > 0 || openPayouts.length > 0) && (
+          <section className="mt-4 rounded-2xl border border-gold/22 bg-gold/6 p-4">
+            <p className="micro-label">Waiting on the network</p>
+            <ul className="mt-2 space-y-1.5 text-[11.5px] text-fog">
+              {openDeposits.map((d) => (
+                <li key={d.id} className="flex items-center justify-between gap-2">
+                  <span className="truncate">
+                    Top-up {d.status === "awaiting_pin" ? "awaiting your PIN" : "submitted"} ·{" "}
+                    <span className="font-mono text-[10.5px] text-slate-deep">{d.reference}</span>
+                  </span>
+                  <span className="font-display font-bold text-gold">+{ugx(d.amount)}</span>
+                </li>
+              ))}
+              {openPayouts.map((w) => (
+                <li key={w.id} className="flex items-center justify-between gap-2">
+                  <span className="truncate">
+                    Payout sending to {w.msisdn ?? "your number"} ·{" "}
+                    <span className="font-mono text-[10.5px] text-slate-deep">{w.reference}</span>
+                  </span>
+                  <span className="font-display font-bold text-royal-light">{ugx(w.amount)}</span>
+                </li>
+              ))}
+            </ul>
+            <div className="mt-3">
+              <ReconcileButton />
+            </div>
+          </section>
+        )}
+
         <nav className="mt-4 grid grid-cols-3 gap-1 rounded-xl border border-electric/12 bg-navy-900/60 p-1">
           {tabs.map((t) => (
             <Link
@@ -107,24 +150,34 @@ export default async function WalletPage({
           {view === "deposit" && (
             <>
               <section className="surface rounded-2xl p-4">
-                <h2 className="mb-3 font-display text-[13px] font-bold text-white">Deposit request</h2>
-                <DepositForm />
+                <h2 className="mb-3 font-display text-[13px] font-bold text-white">
+                  Mobile money top-up
+                </h2>
+                <DepositForm defaultPhone={data.profile.phone} />
               </section>
 
               <section className="surface rounded-2xl p-4">
-                <h2 className="font-display text-[13px] font-bold text-white">Where to send it</h2>
-                <ul className="mt-3 space-y-3">
-                  {channels.map((c) => (
-                    <li
-                      key={c.name}
-                      className="border-b border-white/8 pb-3 last:border-0 last:pb-0"
-                    >
-                      <p className="font-display text-[12px] font-bold text-gold">{c.name}</p>
-                      <p className="mt-0.5 font-mono text-[11px] text-fog">{c.detail}</p>
-                      <p className="mt-0.5 text-[10.5px] leading-relaxed text-slate-deep">{c.note}</p>
+                <h2 className="font-display text-[13px] font-bold text-white">How it moves</h2>
+                <ol className="mt-3 space-y-3">
+                  {collectSteps.map((step, index) => (
+                    <li key={step.title} className="flex gap-3">
+                      <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg border border-electric/25 bg-electric/8 font-display text-[10px] font-bold text-electric">
+                        {index + 1}
+                      </span>
+                      <div>
+                        <p className="font-display text-[12px] font-bold text-gold">{step.title}</p>
+                        <p className="mt-0.5 text-[10.5px] leading-relaxed text-slate-deep">
+                          {step.detail}
+                        </p>
+                      </div>
                     </li>
                   ))}
-                </ul>
+                </ol>
+                {openDeposits.length > 0 && (
+                  <div className="mt-3 border-t border-electric/12 pt-3">
+                    <ReconcileButton />
+                  </div>
+                )}
               </section>
             </>
           )}
@@ -133,18 +186,37 @@ export default async function WalletPage({
             <>
               <section className="surface rounded-2xl p-4">
                 <h2 className="mb-3 font-display text-[13px] font-bold text-white">
-                  Withdrawal request
+                  Mobile money payout
                 </h2>
-                <WithdrawForm balance={data.wallet.balance} />
+                <WithdrawForm
+                  balance={data.wallet.balance}
+                  defaultPhone={data.profile.phone}
+                  open={withdrawalsOpen}
+                />
               </section>
 
               <section className="surface rounded-2xl p-4">
                 <h2 className="font-display text-[13px] font-bold text-white">Settlement rules</h2>
                 <ul className="mt-2.5 space-y-1.5 text-[11px] leading-relaxed text-mist">
-                  <li>· Minimum withdrawal {ugx(20_000)}.</li>
-                  <li>· Mobile money settles the same working day before 16:00 EAT.</li>
-                  <li>· Funds are held from your balance while the payout is processing.</li>
+                  <li>· Minimum withdrawal {ugx(minWithdrawal)}, whole shillings only.</li>
+                  <li>
+                    ·{" "}
+                    {withdrawalRuleLine(withdrawalsOpen, rules)}
+                  </li>
+                  <li>
+                    · Daily earnings mature at {earningsMatureAt} EAT, so today's credit unlocks
+                    after that.
+                  </li>
+                  <li>
+                    · Airtel settles on the spot; MTN confirms seconds later. A declined payout is
+                    returned to your balance immediately.
+                  </li>
                 </ul>
+                {openPayouts.length > 0 && (
+                  <div className="mt-3 border-t border-electric/12 pt-3">
+                    <ReconcileButton />
+                  </div>
+                )}
               </section>
             </>
           )}
@@ -173,4 +245,16 @@ export default async function WalletPage({
       </div>
     </div>
   );
+}
+
+/** States the live window when the database published it, the schedule otherwise. */
+function withdrawalRuleLine(
+  open: boolean,
+  rules?: { withdrawal_opens_at: string; withdrawal_closes_at: string },
+) {
+  const window = rules
+    ? `${rules.withdrawal_opens_at} – ${rules.withdrawal_closes_at} EAT`
+    : `${withdrawalOpensAt} – ${withdrawalClosesAt} EAT`;
+
+  return `Withdrawals open ${window} (Kampala time) — ${open ? "open now" : "closed right now"}.`;
 }

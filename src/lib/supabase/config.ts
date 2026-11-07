@@ -42,5 +42,35 @@ export const isSupabaseConfigured =
 export const siteUrl =
   process.env.NEXT_PUBLIC_SITE_URL?.replace(/\/$/, "") ?? "http://localhost:3000";
 
-export const minDeposit = Number(process.env.NEXT_PUBLIC_MIN_DEPOSIT ?? 20_000);
-export const minWithdrawal = Number(process.env.NEXT_PUBLIC_MIN_WITHDRAWAL ?? 20_000);
+/**
+ * Money rules. The database enforces the same figures in rpc.sql — these exist
+ * so the forms can state them before a round-trip. UGX throughout.
+ */
+export const minDeposit = Number(process.env.NEXT_PUBLIC_MIN_DEPOSIT ?? 2_000);
+export const minWithdrawal = Number(process.env.NEXT_PUBLIC_MIN_WITHDRAWAL ?? 5_000);
+
+/** Platform clock: all schedules are read in Ugandan local time. */
+export const platformTimezone = process.env.NEXT_PUBLIC_PLATFORM_TZ ?? "Africa/Kampala";
+
+/** Daily earnings mature at 22:00 local time. */
+export const earningsMatureAt = process.env.NEXT_PUBLIC_EARNINGS_MATURE_AT ?? "22:00";
+
+/** Withdrawals are only accepted between 09:00 and 22:00 local time. */
+export const withdrawalOpensAt = process.env.NEXT_PUBLIC_WITHDRAWAL_OPENS ?? "09:00";
+export const withdrawalClosesAt = process.env.NEXT_PUBLIC_WITHDRAWAL_CLOSES ?? "22:00";
+
+/* ── Shashura mobile-money gateway (server only) ─────────────────────────────
+ * https://shashura.com/developers — collections (requestToPay) and payouts
+ * (disburse). Secrets stay on the server: none of these are NEXT_PUBLIC_.
+ */
+export const shashura = {
+  baseUrl: (process.env.SHASHURA_BASE_URL ?? "https://shashura.com/api/v1").replace(/\/$/, ""),
+  clientId: process.env.SHASHURA_CLIENT_ID ?? "",
+  clientSecret: process.env.SHASHURA_CLIENT_SECRET ?? "",
+  /** `sandbox` or `production` — sent as the X-Target-Environment header. */
+  environment: (process.env.SHASHURA_ENV ?? "sandbox") as "sandbox" | "production",
+  country: process.env.SHASHURA_COUNTRY ?? "UG",
+  webhookSecret: process.env.SHASHURA_WEBHOOK_SECRET ?? "",
+};
+
+export const isPaymentsConfigured = Boolean(shashura.clientId && shashura.clientSecret);

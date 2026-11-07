@@ -421,6 +421,91 @@
   }
 }
 
+/* ── Market widgets (news wire + signal board) ───────────────────────────── */
+
+.no-scrollbar {
+  scrollbar-width: none;
+}
+
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+@keyframes card-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.card-in {
+  animation: card-in 0.42s cubic-bezier(0.22, 0.8, 0.3, 1) both;
+}
+
+/* The "live" dot on both widget headers. */
+@keyframes live-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(0, 230, 118, 0.45);
+    opacity: 1;
+  }
+  50% {
+    box-shadow: 0 0 0 6px rgba(0, 230, 118, 0);
+    opacity: 0.6;
+  }
+}
+
+.live-dot {
+  animation: live-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes spin-slow {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.spin {
+  animation: spin-slow 0.7s linear infinite;
+}
+
+/* Countdown bar under the wire header: one full sweep per auto-advance step. */
+@keyframes wire-tick {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+
+.wire-tick {
+  transform-origin: left center;
+  animation: wire-tick var(--tick, 5s) linear both;
+}
+
+.wire-tick[data-paused="true"] {
+  animation-play-state: paused;
+}
+
+/* Re-mounted by key whenever a print changes, so the colour replays. */
+@keyframes price-flash {
+  0% {
+    color: var(--color-electric);
+  }
+  100% {
+    color: #ffffff;
+  }
+}
+
+.price-flash {
+  animation: price-flash 0.9s ease-out;
+}
+
 .ring-expand::after {
   content: "";
   position: absolute;
@@ -435,7 +520,12 @@
   .scan-line,
   .pulse-ring,
   .ring-expand::after,
-  .rise {
+  .rise,
+  .card-in,
+  .live-dot,
+  .spin,
+  .wire-tick,
+  .price-flash {
     animation: none;
   }
   html {

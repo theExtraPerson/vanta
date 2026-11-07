@@ -5,13 +5,14 @@ import {
   claimEarningsAction,
   depositAction,
   investAction,
+  reconcilePaymentsAction,
   updateProfileAction,
   withdrawAction,
   type ActionState,
 } from "@/lib/actions";
 import { Alert, Field } from "@/components/ui/Field";
 import { Button, Pill } from "@/components/ui/primitives";
-import { minWithdrawal } from "@/lib/supabase/config";
+import { minDeposit, minWithdrawal, withdrawalClosesAt, withdrawalOpensAt } from "@/lib/supabase/config";
 import { featuredPlan, plans } from "@/lib/plans";
 import { num, ugx } from "@/lib/format";
 
@@ -98,9 +99,14 @@ export function PlanGrid({ balance }: { balance: number }) {
 
 /* ── Deposit ─────────────────────────────────────────────────────────────── */
 
-const QUICK_AMOUNTS = [20_000, 50_000, 150_000, 500_000];
+const QUICK_AMOUNTS = [minDeposit, 20_000, 50_000, 150_000];
 
-export function DepositForm() {
+/**
+ * Mobile money top-up. There is nothing to copy-paste any more: the gateway
+ * pushes a PIN prompt to the number below and the wallet is credited by the
+ * provider's callback.
+ */
+export function DepositForm({ defaultPhone }: { defaultPhone?: string | null }) {
   const [state, action, pending] = useActionState<State, FormData>(depositAction, undefined);
   const [amount, setAmount] = useState("");
 
@@ -112,10 +118,11 @@ export function DepositForm() {
         label="Amount"
         name="amount"
         type="number"
-        min={20000}
+        min={minDeposit}
         step={1000}
-        placeholder="50000"
+        placeholder={String(minDeposit)}
         suffix="UGX"
+        hint={`Minimum ${ugx(minDeposit)}`}
         value={amount}
         onChange={(e) => setAmount(e.target.value)}
         required
@@ -144,7 +151,7 @@ export function DepositForm() {
           htmlFor="method"
           className="mb-1.5 block font-display text-[10.5px] font-bold tracking-[0.14em] text-mist uppercase"
         >
-          Payment channel
+          Mobile money network
         </label>
         <select
           id="method"
@@ -154,34 +161,62 @@ export function DepositForm() {
         >
           <option className="bg-navy-900">MTN MoMo</option>
           <option className="bg-navy-900">Airtel Money</option>
-          <option className="bg-navy-900">Bank transfer</option>
         </select>
       </div>
 
       <Field
-        label="Transaction reference"
-        name="reference"
-        placeholder="e.g. 24091823"
-        hint="From your MoMo SMS"
+        label="Number to charge"
+        name="phone"
+        type="tel"
+        defaultValue={defaultPhone ?? ""}
+        placeholder="0772 000 000"
+        hint="You will get a mobile money PIN prompt on this line"
         required
-        error={state?.field === "reference" ? state.message : undefined}
+        error={state?.field === "phone" ? state.message : undefined}
       />
 
       <Button type="submit" variant="primary" size="lg" className="w-full" disabled={pending}>
-        {pending ? "Submitting…" : "Submit deposit"}
+        {pending ? "Sending prompt…" : "Send payment prompt"}
       </Button>
 
       <p className="text-[11px] leading-relaxed text-slate-deep">
-        Send the exact amount to the Vanta collection number shown in your confirmation email, then
-        submit the transaction ID here. The desk reconciles within 30 minutes.
+        Approve the prompt on your phone and the amount lands in your wallet automatically. If the
+        network is slow, use “Check payment status” below.
       </p>
+    </form>
+  );
+}
+
+/** Settles open movements from the provider when a callback has not arrived. */
+export function ReconcileButton() {
+  const [state, action, pending] = useActionState<State, FormData>(reconcilePaymentsAction, undefined);
+
+  return (
+    <form action={action} className="space-y-2">
+      <Button type="submit" variant="outline" size="sm" className="w-full" disabled={pending}>
+        {pending ? "Checking…" : "Check payment status"}
+      </Button>
+      {state && (
+        <p className={`text-[10.5px] leading-relaxed ${state.ok ? "text-mint" : "text-[#ff8f8f]"}`}>
+          {state.message}
+        </p>
+      )}
     </form>
   );
 }
 
 /* ── Withdraw ────────────────────────────────────────────────────────────── */
 
-export function WithdrawForm({ balance }: { balance: number }) {
+export function WithdrawForm({
+  balance,
+  defaultPhone,
+  open = true,
+}: {
+  balance: number;
+  defaultPhone?: string | null;
+  /** Server-side clock says whether the 09:00–22:00 window is currently open. */
+  open?: boolean;
+}) {
   const [state, action, pending] = useActionState<State, FormData>(withdrawAction, undefined);
   const [amount, setAmount] = useState("");
 
@@ -193,8 +228,13 @@ export function WithdrawForm({ balance }: { balance: number }) {
         <p className="micro-label">Available to withdraw</p>
         <p className="mt-1 font-display text-2xl font-bold text-gold">{ugx(balance)}</p>
         <p className="mt-1 text-[11px] text-slate-deep">
-          Minimum {ugx(minWithdrawal)} · settled within one working day
+          Minimum {ugx(minWithdrawal)} · open {withdrawalOpensAt}–{withdrawalClosesAt} EAT
         </p>
+        {!open && (
+          <Pill tone="muted" className="mt-2">
+            Window closed
+          </Pill>
+        )}
       </div>
 
       <Field
@@ -213,7 +253,7 @@ export function WithdrawForm({ balance }: { balance: number }) {
 
       <button
         type="button"
-        onClick={() => setAmount(String(balance))}
+        onClick={() => setAmount(String(Math.floor(balance)))}
         className="rounded-lg border border-electric/25 px-3 py-1.5 font-display text-[10px] font-bold tracking-[0.1em] text-electric uppercase"
       >
         Withdraw everything
@@ -224,7 +264,7 @@ export function WithdrawForm({ balance }: { balance: number }) {
           htmlFor="withdraw-method"
           className="mb-1.5 block font-display text-[10.5px] font-bold tracking-[0.14em] text-mist uppercase"
         >
-          Destination channel
+          Payout network
         </label>
         <select
           id="withdraw-method"
@@ -234,21 +274,28 @@ export function WithdrawForm({ balance }: { balance: number }) {
         >
           <option className="bg-navy-900">MTN MoMo</option>
           <option className="bg-navy-900">Airtel Money</option>
-          <option className="bg-navy-900">Bank transfer</option>
         </select>
       </div>
 
       <Field
-        label="Mobile money / account number"
-        name="destination"
+        label="Mobile money number"
+        name="phone"
+        type="tel"
+        defaultValue={defaultPhone ?? ""}
         placeholder="+256 7XX XXX XXX"
+        hint="Airtel clears instantly; MTN confirms a few seconds later"
         required
-        error={state?.field === "destination" ? state.message : undefined}
+        error={state?.field === "phone" ? state.message : undefined}
       />
 
       <Button type="submit" variant="primary" size="lg" className="w-full" disabled={pending}>
-        {pending ? "Queueing…" : "Request withdrawal"}
+        {pending ? "Sending payout…" : "Withdraw now"}
       </Button>
+
+      <p className="text-[11px] leading-relaxed text-slate-deep">
+        The amount is held from your balance as soon as you submit. If the network declines the
+        payout, it goes straight back to your wallet.
+      </p>
     </form>
   );
 }
