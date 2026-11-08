@@ -8,10 +8,25 @@ import { getSessionUser } from "@/lib/supabase/server";
 import { planBySlug } from "@/lib/plans";
 import { ugx } from "@/lib/format";
 
+const SHARE_TITLE = "Vanta Fintech — AI Technology";
+const SHARE_TEXT =
+  "An ecosystem that removes the barriers between the retail investor and the professional market. We guarantee the transparency of every operation and give access to capital management tools at an institutional level.";
+
+// This is what the recipient sees when a referral link is shared — the page
+// metadata feeds the link-preview card, so the pitch lives here, not on the
+// root layout's generic OpenGraph block.
 export const metadata: Metadata = {
-  title: "Create an account",
-  description:
-    "Join VANTAFINTECH AI Technology: name, number, username and password is all it takes to start.",
+  title: { absolute: SHARE_TITLE },
+  description: SHARE_TEXT,
+  openGraph: {
+    title: SHARE_TITLE,
+    description: SHARE_TEXT,
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: SHARE_TITLE,
+    description: SHARE_TEXT,
+  },
 };
 
 export default async function RegisterPage({
