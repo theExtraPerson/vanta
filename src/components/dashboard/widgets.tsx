@@ -13,6 +13,7 @@ const txMeta: Record<
   withdrawal: { label: "Withdrawal", tone: "red", sign: "−" },
   investment: { label: "Investment", tone: "muted", sign: "−" },
   capital_return: { label: "Capital return", tone: "green", sign: "+" },
+  registration_bonus: { label: "Registration bonus", tone: "gold", sign: "+" },
   adjustment_credit: { label: "Wallet correction", tone: "gold", sign: "+" },
   adjustment_debit: { label: "Wallet correction", tone: "red", sign: "−" },
 };

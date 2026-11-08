@@ -135,7 +135,7 @@ declare
   v_min_dep numeric;
   v_min_wd  numeric;
 begin
-  v_min_dep := public.vanta_setting_number('min_deposit', 2000);
+  v_min_dep := public.vanta_setting_number('min_deposit', 10000);
   v_min_wd  := public.vanta_setting_number('min_withdrawal', 5000);
 
   return jsonb_build_object(
@@ -152,7 +152,7 @@ exception when others then
   -- a malformed setting must never take the app's rule panel down
   return jsonb_build_object(
     'currency', 'UGX', 'timezone', 'Africa/Kampala',
-    'min_deposit', 2000, 'min_withdrawal', 5000,
+    'min_deposit', 10000, 'min_withdrawal', 5000,
     'earnings_mature_at', '22:00',
     'withdrawal_opens_at', '09:00', 'withdrawal_closes_at', '22:00',
     'withdrawals_open', public.vanta_local_now()::time >= time '09:00'
@@ -586,7 +586,7 @@ begin
   perform public.vanta_assert_not_banned(v_uid);
 
   -- floor and ceiling come from the desk settings when the admin has moved them
-  v_min := public.vanta_setting_number('min_deposit', 2000);
+  v_min := public.vanta_setting_number('min_deposit', 10000);
   if p_amount is null or p_amount < v_min then
     raise exception 'MIN_DEPOSIT: the minimum deposit is % UGX', to_char(v_min, 'FM999,999,999');
   end if;

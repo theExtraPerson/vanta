@@ -140,12 +140,15 @@ export function KeyValue({ label, children }: { label: string; children: React.R
  * server for a fresh dashboard payload. Children receive the standard
  * useActionState triple so each form stays a few lines.
  */
-export function useRefreshAction<A extends unknown[]>(
-  action: (...args: A) => Promise<ActionState>,
-): [(a: A[0]) => void, ActionState | undefined, boolean, () => void] {
+export function useRefreshAction<P>(
+  action: (payload: P) => Promise<ActionState>,
+): [(payload: P) => void, ActionState | undefined, boolean, () => void] {
   const router = useRouter();
-  const [state, run, pending] = useActionState<ActionState | undefined, A[0]>(
-    action as unknown as (prev: ActionState | undefined, payload: A[0]) => Promise<ActionState>,
+  // useActionState calls its action as (prevState, payload); the desk actions
+  // take only the form payload, so adapt here — passing `action` straight in
+  // would hand them prevState (undefined) where they expect FormData.
+  const [state, run, pending] = useActionState<ActionState | undefined, P>(
+    (_prev, payload) => action(payload),
     undefined,
   );
   const lastOk = useRef(false);

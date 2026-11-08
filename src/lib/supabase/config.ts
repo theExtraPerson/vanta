@@ -46,7 +46,7 @@ export const siteUrl =
  * Money rules. The database enforces the same figures in rpc.sql — these exist
  * so the forms can state them before a round-trip. UGX throughout.
  */
-export const minDeposit = Number(process.env.NEXT_PUBLIC_MIN_DEPOSIT ?? 2_000);
+export const minDeposit = Number(process.env.NEXT_PUBLIC_MIN_DEPOSIT ?? 10_000);
 export const minWithdrawal = Number(process.env.NEXT_PUBLIC_MIN_WITHDRAWAL ?? 5_000);
 
 /** Platform clock: all schedules are read in Ugandan local time. */

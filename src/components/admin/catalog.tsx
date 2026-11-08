@@ -374,8 +374,9 @@ export function SettingsSection({
       <div>
         <SectionLabel>Money rules</SectionLabel>
         <div className="grid grid-cols-2 gap-2">
-          <MoneySetting label="Minimum deposit" keyName="min_deposit" value={Number(settings.min_deposit ?? 2000)} />
+          <MoneySetting label="Minimum deposit" keyName="min_deposit" value={Number(settings.min_deposit ?? 10000)} />
           <MoneySetting label="Minimum withdrawal" keyName="min_withdrawal" value={Number(settings.min_withdrawal ?? 5000)} />
+          <MoneySetting label="Registration bonus" keyName="registration_bonus" value={Number(settings.registration_bonus ?? 1000)} />
           <TimeSetting label="Withdrawals open at" keyName="withdrawal_opens_at" value={String(settings.withdrawal_opens_at ?? "09:00")} />
           <TimeSetting label="Withdrawals close at" keyName="withdrawal_closes_at" value={String(settings.withdrawal_closes_at ?? "22:00")} />
           <TimeSetting label="Earnings mature at" keyName="earnings_mature_at" value={String(settings.earnings_mature_at ?? "22:00")} />

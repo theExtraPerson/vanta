@@ -247,6 +247,7 @@ const TX_LABEL: Record<TxType, string> = {
   referral: "Referral commission",
   withdrawal: "Withdrawal",
   capital_return: "Capital return",
+  registration_bonus: "Registration bonus",
   adjustment_credit: "Desk credit",
   adjustment_debit: "Desk debit",
 };
@@ -258,6 +259,7 @@ const TX_CREDIT: Record<TxType, boolean> = {
   referral: true,
   withdrawal: false,
   capital_return: true,
+  registration_bonus: true,
   adjustment_credit: true,
   adjustment_debit: false,
 };

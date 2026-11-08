@@ -71,8 +71,9 @@ insert into public.platform_settings (key, value) values
   ('freeze_message',  '"Deposits, activations, claims and withdrawals are paused for maintenance."'::jsonb),
   ('referral_rate_l1', '0.17'::jsonb),
   ('referral_rate_l2', '0.01'::jsonb),
-  ('min_deposit',          '2000'::jsonb),
+  ('min_deposit',          '10000'::jsonb),
   ('min_withdrawal',       '5000'::jsonb),
+  ('registration_bonus',   '1000'::jsonb),
   ('withdrawal_opens_at',  '"09:00"'::jsonb),
   ('withdrawal_closes_at', '"22:00"'::jsonb),
   ('earnings_mature_at',   '"22:00"'::jsonb),
@@ -833,16 +834,93 @@ $$;
 
 -- ── Adjustment ledger types ─────────────────────────────────────────────────
 -- Widen the transactions type vocabulary so a manual correction is auditable
--- and renders with the right sign in the investor ledger.
+-- and renders with the right sign in the investor ledger, and so the one-off
+-- registration bonus credit (handle_new_user below) has a type of its own.
 do $$
 begin
   alter table public.transactions drop constraint if exists transactions_type_check;
   alter table public.transactions
     add constraint transactions_type_check check (type in (
       'deposit', 'investment', 'earning', 'referral', 'withdrawal', 'capital_return',
-      'adjustment_credit', 'adjustment_debit'));
+      'adjustment_credit', 'adjustment_debit', 'registration_bonus'));
 exception when others then
   null; -- constraint name differs on some installs; the check already allows it
+end;
+$$;
+
+-- ── Registration bonus on sign-up ───────────────────────────────────────────
+-- Re-applies handle_new_user with the bonus credit so re-running this file
+-- alone upgrades databases that were created before the feature existed.
+-- Mirrors schema.sql; the amount comes from platform_settings with a
+-- published fallback of 1,000 UGX, and 0 disables the credit.
+create or replace function public.handle_new_user()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_code      text;
+  v_referrer  uuid;
+  v_ref_input text;
+  v_username  text;
+  v_bonus     numeric;
+begin
+  -- unique random referral code (letters + numbers, no separators)
+  loop
+    v_code := public.vanta_random_code(6);
+    exit when not exists (select 1 from public.profiles where referral_code = v_code);
+  end loop;
+
+  -- invite code arrives from /register?code=XXXXXX
+  v_ref_input := upper(regexp_replace(
+    coalesce(new.raw_user_meta_data ->> 'referral_code', ''), '[^a-zA-Z0-9]', '', 'g'));
+
+  if v_ref_input <> '' then
+    select id into v_referrer
+    from public.profiles
+    where referral_code = v_ref_input
+    limit 1;
+  end if;
+
+  -- username is validated client-side; keep the database copy in the same
+  -- shape (lowercase, [a-z0-9_]) so the unique index cannot be spoofed
+  v_username := nullif(
+    regexp_replace(lower(coalesce(new.raw_user_meta_data ->> 'username', '')),
+                   '[^a-z0-9_]', '', 'g'),
+    '');
+
+  if v_username is not null
+     and exists (select 1 from public.profiles where lower(username) = v_username) then
+    v_username := left(v_username, 12) || lower(public.vanta_random_code(3));
+  end if;
+
+  insert into public.profiles (id, full_name, username, email, phone, referral_code, referred_by)
+  values (
+    new.id,
+    coalesce(nullif(trim(new.raw_user_meta_data ->> 'full_name'), ''), 'Vanta Investor'),
+    v_username,
+    new.email,
+    new.raw_user_meta_data ->> 'phone',
+    v_code,
+    v_referrer
+  )
+  on conflict (id) do nothing;
+
+  -- Registration bonus, credited once when the profile was actually created.
+  if found then
+    v_bonus := coalesce(public.vanta_setting_number('registration_bonus', 1000), 0);
+    if v_bonus > 0 then
+      update public.profiles
+         set balance = balance + v_bonus
+       where id = new.id;
+
+      insert into public.transactions (user_id, type, amount, status, note)
+      values (new.id, 'registration_bonus', v_bonus, 'completed', 'Registration bonus');
+    end if;
+  end if;
+
+  return new;
 end;
 $$;
 

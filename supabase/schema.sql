@@ -137,7 +137,8 @@ create table if not exists public.transactions (
   id         uuid primary key default gen_random_uuid(),
   user_id    uuid not null references public.profiles (id) on delete cascade,
   type       text not null check (type in (
-               'deposit', 'investment', 'earning', 'referral', 'withdrawal', 'capital_return')),
+               'deposit', 'investment', 'earning', 'referral', 'withdrawal',
+               'capital_return', 'registration_bonus')),
   amount     numeric(14, 2) not null check (amount > 0),
   status     text not null default 'completed' check (status in ('pending', 'completed', 'rejected')),
   reference  text,
@@ -350,6 +351,7 @@ declare
   v_referrer  uuid;
   v_ref_input text;
   v_username  text;
+  v_bonus     numeric;
 begin
   -- unique random referral code (letters + numbers, no separators)
   loop
@@ -391,6 +393,22 @@ begin
     v_referrer
   )
   on conflict (id) do nothing;
+
+  -- Registration bonus, credited once when the profile was actually created.
+  -- The amount lives in platform_settings (registration_bonus) so the desk can
+  -- retune it without a deploy; 0 disables the credit. Before admin.sql exists
+  -- the helper falls back to the published 1,000 UGX figure.
+  if found then
+    v_bonus := coalesce(public.vanta_setting_number('registration_bonus', 1000), 0);
+    if v_bonus > 0 then
+      update public.profiles
+         set balance = balance + v_bonus
+       where id = new.id;
+
+      insert into public.transactions (user_id, type, amount, status, note)
+      values (new.id, 'registration_bonus', v_bonus, 'completed', 'Registration bonus');
+    end if;
+  end if;
 
   return new;
 end;

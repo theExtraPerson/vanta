@@ -5,6 +5,7 @@ export type TxType =
   | "referral"
   | "withdrawal"
   | "capital_return"
+  | "registration_bonus"
   | "adjustment_credit"
   | "adjustment_debit";
 
