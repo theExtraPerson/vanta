@@ -21,9 +21,11 @@
 --
 --  Money rules (mirrored in src/lib/supabase/config.ts)
 --  ----------------------------------------------------
---   minimum deposit        2,000 UGX
+--   minimum deposit        10,000 UGX (settings fallback; the deposits table
+--                          keeps a lower 2,000 CHECK as its historical floor)
 --   minimum withdrawal     5,000 UGX
---   daily earnings mature  every day at 22:00 Africa/Kampala
+--   withdrawal fee         16 % of the gross, member is paid the net
+--   daily earnings mature  every day at 22:00 Africa/Kampala (earnings_mature_at)
 --   withdrawals accepted   09:00 – 22:00 Africa/Kampala
 -- ============================================================================
 
@@ -38,21 +40,38 @@ as $$
 $$;
 
 -- When day p_index (0-based) of a cycle opened at p_started_at becomes payable:
--- Day N of a cycle matures at the platform's earnings hour — the
--- earnings_mature_at setting (published default 22:00 Kampala), so the desk can
--- move the release time without a code change. Was a hardcoded 22 hours.
+-- the earnings_mature_at setting (published default 22:00 Kampala) on that
+-- local calendar day, so the desk can move the release hour without a code
+-- change. A malformed setting falls back to 22:00 rather than breaking every
+-- claim, and maturity is always strictly after the start: activating at 22:40
+-- waits until tomorrow 22:00 instead of making day 0 payable on the spot.
 create or replace function public.vanta_maturity_at(p_started_at timestamptz, p_index integer)
 returns timestamptz
-language sql
+language plpgsql
 stable
 set search_path = public
 as $$
-  select (
+declare
+  v_at  text := public.vanta_setting_text('earnings_mature_at', '22:00');
+  v_due timestamptz;
+begin
+  if v_at is null or v_at !~ '^([01][0-9]|2[0-3]):[0-5][0-9]$' then
+    v_at := '22:00';
+  end if;
+
+  v_due := (
     (date_trunc('day', p_started_at at time zone 'Africa/Kampala')
        + make_interval(days => p_index)
-       + (public.vanta_setting_text('earnings_mature_at', '22:00'))::interval
+       + v_at::interval)
     at time zone 'Africa/Kampala'
   );
+
+  if v_due <= p_started_at then
+    v_due := v_due + interval '1 day';
+  end if;
+
+  return v_due;
+end;
 $$;
 
 -- One readable setting, or its published default. Security definer so it can
@@ -116,7 +135,9 @@ begin
   v_close := coalesce(public.vanta_setting_text('withdrawal_closes_at', '22:00')::time, time '22:00');
 
   if v_close <= v_open then
-    return v_now >= v_open; -- window wraps past midnight: open from closes-at back to opens-at
+    -- window wraps past midnight (e.g. 22:00–06:00): open from closes-at
+    -- through midnight and up to opens-at the other side
+    return v_now >= v_open or v_now < v_close;
   end if;
   return v_now >= v_open and v_now < v_close;
 exception when others then
@@ -506,7 +527,9 @@ begin
          note   = coalesce(p_network, v_dep.method) || ' · ' || v_dep.msisdn || ' · settled'
    where user_id = v_dep.user_id
      and type = 'deposit'
-     and status = 'pending'
+     -- a payment that failed as a stale prompt and then really arrives is
+     -- credited above; the ledger row has to follow it off 'rejected'
+     and status in ('pending', 'rejected')
      and (reference = v_dep.reference or meta ->> 'deposit_id' = v_dep.id::text);
 
   return v_dep.amount;
@@ -611,7 +634,11 @@ begin
     raise exception 'MSISDN_INVALID: enter the mobile money number to charge (077…, 070…)';
   end if;
 
-  -- one live prompt per investor, so a stale attempt cannot race a new one
+  -- one live prompt per investor, so a stale attempt cannot race a new one.
+  -- The profile row lock serializes this user's concurrent deposit requests —
+  -- without it two parallel calls could both pass the exists check.
+  perform 1 from public.profiles where id = v_uid for update;
+
   if exists (
     select 1 from public.deposits d
     where d.user_id = v_uid
@@ -670,7 +697,7 @@ declare
   v_dep   public.deposits%rowtype;
   v_state text := upper(coalesce(p_state, 'PENDING'));
 begin
-  if auth.role() <> 'service_role' then
+  if coalesce(auth.role(), '') <> 'service_role' then
     raise exception 'FORBIDDEN';
   end if;
 
@@ -750,7 +777,9 @@ begin
          note   = coalesce(v_dep.method, 'Manual') || ' · confirmed by the desk'
    where user_id = v_dep.user_id
      and type = 'deposit'
-     and status = 'pending'
+     -- approving a prompt the sweep had already timed out must revive the
+     -- ledger row too, not leave it rejected while the wallet moves
+     and status in ('pending', 'rejected')
      and (reference = v_dep.reference or meta ->> 'deposit_id' = p_deposit_id::text);
 
   return v_dep.amount;
@@ -787,6 +816,14 @@ begin
 
   if v_wd.status in ('paid', 'processed') then
     return 0;
+  end if;
+
+  if v_wd.status in ('failed', 'rejected') then
+    -- the hold went back to the wallet when this payout closed; settling it
+    -- now would pay the member twice. A late network success here is an
+    -- explicit reconciliation case for the desk, never a blind settle.
+    raise exception 'PAYOUT_ALREADY_CLOSED: withdrawal % is % — reconcile by hand',
+      p_withdrawal_id, v_wd.status;
   end if;
 
   update public.withdrawals
@@ -838,8 +875,8 @@ begin
     raise exception 'WITHDRAWAL_NOT_FOUND';
   end if;
 
-  if v_wd.status in ('paid', 'processed', 'rejected') then
-    return v_wd.status;
+  if v_wd.status in ('paid', 'processed', 'rejected', 'failed') then
+    return v_wd.status; -- terminal: repeated failure events must never re-refund
   end if;
 
   update public.withdrawals
@@ -1008,7 +1045,7 @@ as $$
 declare
   v_state text := upper(coalesce(p_state, 'PENDING'));
 begin
-  if auth.role() <> 'service_role' then
+  if coalesce(auth.role(), '') <> 'service_role' then
     raise exception 'FORBIDDEN';
   end if;
 
@@ -1021,6 +1058,12 @@ begin
   end if;
 
   if v_state = 'TS' then
+    -- a callback may have already closed this payout while /disburse was in
+    -- flight; never settle over a hold that was refunded
+    if exists (select 1 from public.withdrawals
+               where id = p_withdrawal_id and status in ('failed', 'rejected')) then
+      return 'closed';
+    end if;
     perform public.vanta_settle_disbursement(p_withdrawal_id, p_tid, null, p_charge);
     return 'paid';
   end if;
@@ -1066,9 +1109,13 @@ declare
   v_event_id  uuid;
   v_dep_id    uuid;
   v_wd_id     uuid;
+  v_dep_amt   numeric;
+  v_dep_state text;
+  v_wd_net    numeric;
+  v_wd_state  text;
   v_applied   boolean := false;
 begin
-  if auth.role() <> 'service_role' then
+  if coalesce(auth.role(), '') <> 'service_role' then
     raise exception 'FORBIDDEN';
   end if;
 
@@ -1102,7 +1149,7 @@ begin
   end if;
 
   if v_type = 'COLLECTION' then
-    select d.id into v_dep_id
+    select d.id, d.amount, d.status into v_dep_id, v_dep_amt, v_dep_state
     from public.deposits d
     where (v_ref is not null and d.reference = v_ref)
        or (v_tid is not null and d.tid = v_tid)
@@ -1113,6 +1160,15 @@ begin
       return 'UNMATCHED'; -- keep the log row so support can reconcile by hand
     end if;
 
+    if v_status = 'SUCCESSFUL' and v_amount is not null and v_amount <> v_dep_amt then
+      -- never credit a prompt the ledger did not ask for: keep the event,
+      -- touch nothing, let the desk reconcile against the gateway statement
+      update public.payment_events
+         set applied = false, deposit_id = v_dep_id
+       where id = v_event_id;
+      return 'AMOUNT_MISMATCH';
+    end if;
+
     if v_status = 'SUCCESSFUL' then
       perform public.vanta_settle_collection(v_dep_id, v_tid, v_network, v_charge, v_net);
     else
@@ -1121,7 +1177,7 @@ begin
 
     v_applied := true;
   elsif v_type = 'DISBURSEMENT' then
-    select w.id into v_wd_id
+    select w.id, w.amount - coalesce(w.fee, 0), w.status into v_wd_id, v_wd_net, v_wd_state
     from public.withdrawals w
     where (v_ref is not null and w.reference = v_ref)
        or (v_tid is not null and w.tid = v_tid)
@@ -1130,6 +1186,22 @@ begin
 
     if v_wd_id is null then
       return 'UNMATCHED';
+    end if;
+
+    if v_status = 'SUCCESSFUL' and v_wd_state in ('failed', 'rejected') then
+      -- the hold was already refunded when this payout closed; a late success
+      -- is an explicit reconciliation case, never a double pay-out
+      update public.payment_events
+         set applied = false, withdrawal_id = v_wd_id
+       where id = v_event_id;
+      return 'CLOSED_LATE_SUCCESS';
+    end if;
+
+    if v_status = 'SUCCESSFUL' and v_amount is not null and v_amount <> v_wd_net then
+      update public.payment_events
+         set applied = false, withdrawal_id = v_wd_id
+       where id = v_event_id;
+      return 'AMOUNT_MISMATCH';
     end if;
 
     if v_status = 'SUCCESSFUL' then
@@ -1157,7 +1229,10 @@ revoke all on function public.vanta_handle_gateway_event(jsonb)
   from public, anon, authenticated;
 
 -- ── Cron: pay every due investment ─────────────────────────────────────────
--- Schedule for 22:00 Africa/Kampala — that is when the day's earnings mature.
+-- Scheduled at the earnings_mature_at hour (22:00 Africa/Kampala by default,
+-- vercel.json). Investments owed several days — because the job was down or a
+-- run failed — catch up one matured day per pass, so a missed night never
+-- silently forfeits credits that had already accrued.
 create or replace function public.vanta_run_daily_payouts(p_limit integer default 500)
 returns integer
 language plpgsql
@@ -1167,6 +1242,7 @@ as $$
 declare
   v_rec     record;
   v_paid    integer := 0;
+  v_ok      boolean;
 begin
   for v_rec in
     select id
@@ -1176,13 +1252,18 @@ begin
     order by started_at
     limit p_limit
   loop
-    begin
-      perform public.vanta_pay_day(v_rec.id);
-      v_paid := v_paid + 1;
-    exception when others then
-      -- never let one bad row stop the batch
-      raise notice 'payout skipped for %: %', v_rec.id, sqlerrm;
-    end;
+    -- vanta_pay_day row-locks the investment and raises once nothing further
+    -- is due (or the cycle completes), which bounds this loop by duration_days
+    loop
+      v_ok := true;
+      begin
+        perform public.vanta_pay_day(v_rec.id);
+        v_paid := v_paid + 1;
+      exception when others then
+        v_ok := false; -- not (further) due, completed, or a bad row
+      end;
+      exit when not v_ok;
+    end loop;
   end loop;
 
   return v_paid;
@@ -1347,6 +1428,16 @@ grant execute on function public.vanta_create_investment(text)   to authenticate
 grant execute on function public.vanta_claim_earnings(uuid)      to authenticated;
 grant execute on function public.vanta_start_deposit(numeric, text, text) to authenticated;
 grant execute on function public.vanta_start_withdrawal(numeric, text, text) to authenticated;
+
+-- Server-only entry points, named for service_role explicitly. Today they
+-- also work through Supabase's default privileges, but a revoke from PUBLIC
+-- must never depend on those defaults surviving: the grant is re-asserted on
+-- every apply so the app keeps settling even if the defaults change.
+grant execute on function public.vanta_set_deposit_gateway(uuid, text, text, text, text)   to service_role;
+grant execute on function public.vanta_set_withdrawal_gateway(uuid, text, text, text, text, numeric) to service_role;
+grant execute on function public.vanta_handle_gateway_event(jsonb) to service_role;
+grant execute on function public.vanta_approve_deposit(uuid)       to service_role;
+grant execute on function public.vanta_run_daily_payouts(integer)  to service_role;
 
 -- The pre-gateway request functions are gone; drop them so no client can call a
 -- path that skips the payment provider.
