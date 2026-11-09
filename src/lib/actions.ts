@@ -61,6 +61,9 @@ const DB_HINTS: Record<string, { message: string; field?: string }> = {
   WITHDRAWAL_WINDOW: {
     message: `Withdrawals open from ${withdrawalOpensAt} to ${withdrawalClosesAt} (EAT).`,
   },
+  INVESTMENT_REQUIRED: {
+    message: "Activate a plan first — earnings withdrawals unlock once you hold an investment.",
+  },
   DEPOSIT_PENDING: {
     message: "Your last top-up is still waiting for approval on your phone.",
   },

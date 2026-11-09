@@ -58,6 +58,8 @@ export default async function WalletPage({
   const feePercent = rules?.withdrawal_fee_percent ?? withdrawalFeePercent;
   const openDeposits = data.payments?.awaiting_deposit ?? [];
   const openPayouts = data.payments?.awaiting_payout ?? [];
+  // Earnings withdrawals stay locked until the member holds an investment.
+  const hasInvestment = data.investments.length > 0;
 
   const payouts = data.transactions.filter(
     (t) => t.type === "withdrawal" || t.type === "capital_return" || t.type === "deposit",
@@ -195,6 +197,7 @@ export default async function WalletPage({
                   defaultPhone={data.profile.phone}
                   open={withdrawalsOpen}
                   feePercent={feePercent}
+                  eligible={hasInvestment}
                 />
               </section>
 
@@ -202,6 +205,9 @@ export default async function WalletPage({
                 <h2 className="font-display text-[13px] font-bold text-white">Settlement rules</h2>
                 <ul className="mt-2.5 space-y-1.5 text-[11px] leading-relaxed text-mist">
                   <li>· Minimum withdrawal {ugx(minWithdrawal)}, whole shillings only.</li>
+                  {!hasInvestment && (
+                    <li>· Earnings withdrawals unlock once you hold an investment in any plan.</li>
+                  )}
                   <li>
                     ·{" "}
                     {withdrawalRuleLine(withdrawalsOpen, rules)}

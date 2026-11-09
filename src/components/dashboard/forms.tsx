@@ -1,6 +1,7 @@
 "use client";
 
 import { useActionState, useState } from "react";
+import Link from "next/link";
 import {
   claimEarningsAction,
   depositAction,
@@ -212,6 +213,7 @@ export function WithdrawForm({
   defaultPhone,
   open = true,
   feePercent = 16,
+  eligible = true,
 }: {
   balance: number;
   defaultPhone?: string | null;
@@ -219,6 +221,8 @@ export function WithdrawForm({
   open?: boolean;
   /** Platform payout fee from the withdrawal_fee_percent setting. */
   feePercent?: number;
+  /** False until the member holds an investment — the server enforces this too. */
+  eligible?: boolean;
 }) {
   const [state, action, pending] = useActionState<State, FormData>(withdrawAction, undefined);
   const [amount, setAmount] = useState("");
@@ -231,6 +235,22 @@ export function WithdrawForm({
   return (
     <form action={action} className="space-y-4 pb-1">
       {state && <Alert tone={state.ok ? "success" : "error"}>{state.message}</Alert>}
+
+      {!eligible && (
+        <div className="rounded-2xl border border-gold/25 bg-gold/8 p-4">
+          <p className="font-display text-[12.5px] font-bold text-gold">Withdrawals are locked</p>
+          <p className="mt-1 text-[11.5px] leading-relaxed text-fog">
+            Earnings can only be withdrawn once you hold at least one plan. Activate an investment
+            to unlock payouts for good.
+          </p>
+          <Link
+            href="/dashboard/plans"
+            className="mt-3 inline-flex rounded-lg border border-electric/30 bg-electric/12 px-3 py-1.5 font-display text-[10.5px] font-bold tracking-[0.1em] text-electric uppercase hover:bg-electric/20"
+          >
+            Choose a plan
+          </Link>
+        </div>
+      )}
 
       <div className="surface rounded-2xl p-4">
         <p className="micro-label">Available to withdraw</p>
@@ -309,8 +329,8 @@ export function WithdrawForm({
         error={state?.field === "phone" ? state.message : undefined}
       />
 
-      <Button type="submit" variant="primary" size="lg" className="w-full" disabled={pending}>
-        {pending ? "Queueing request…" : "Request withdrawal"}
+      <Button type="submit" variant="primary" size="lg" className="w-full" disabled={pending || !eligible}>
+        {pending ? "Queueing request…" : eligible ? "Request withdrawal" : "Activate a plan to withdraw"}
       </Button>
 
       <p className="text-[11px] leading-relaxed text-slate-deep">

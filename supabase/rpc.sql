@@ -27,6 +27,7 @@
 --   withdrawal fee         16 % of the gross, member is paid the net
 --   daily earnings mature  every day at 22:00 Africa/Kampala (earnings_mature_at)
 --   withdrawals accepted   09:00 – 22:00 Africa/Kampala
+--   withdrawals require    at least one investment in any plan (INVESTMENT_REQUIRED)
 -- ============================================================================
 
 -- ── Clock + validation helpers ────────────────────────────────────────────
@@ -938,6 +939,18 @@ begin
   end if;
 
   perform public.vanta_assert_not_banned(v_uid);
+
+  -- Withdrawal eligibility lock: earnings are only cashable by members who
+  -- have actually funded the platform — at least one investment in any plan
+  -- must exist on this account. This blocks anyone from withdrawing a
+  -- registration bonus or referral credit without ever activating a plan. It
+  -- unlocks for good once they have invested (completed cycles included), so
+  -- accumulated earnings stay withdrawable after a cycle ends.
+  if not exists (
+    select 1 from public.investments where user_id = v_uid
+  ) then
+    raise exception 'INVESTMENT_REQUIRED: activate a plan before withdrawing earnings';
+  end if;
 
   v_min := public.vanta_setting_number('min_withdrawal', 5000);
   if p_amount is null or p_amount < v_min then
