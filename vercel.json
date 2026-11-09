@@ -1,9 +1,11 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "crons": [
-    {
+  "schedules": {
+    "daily-payouts": {
+      "schedule": "0 22 * * *",
+      "timezone": "Africa/Kampala",
       "path": "/api/cron/daily-payouts",
-      "schedule": "0 19 * * *"
+      "requestMethod": "GET"
     }
-  ]
+  }
 }

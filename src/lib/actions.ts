@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import {
+  earningsMatureAt,
   emailForUsername,
   isSupabaseConfigured,
   minDeposit,
@@ -68,7 +69,9 @@ const DB_HINTS: Record<string, { message: string; field?: string }> = {
     message: "The mobile money account does not have enough balance for this amount.",
     field: "amount",
   },
-  EARNING_NOT_DUE: { message: "This earning matures at 22:00 EAT — come back after that." },
+  EARNING_NOT_DUE: {
+    message: `This earning matures at ${earningsMatureAt} EAT — come back after that.`,
+  },
   INVESTMENT_COMPLETED: { message: "This cycle is already complete." },
   INVESTMENT_NOT_FOUND: { message: "We could not find that plan." },
   PLAN_NOT_FOUND: { message: "That plan is no longer on offer." },
@@ -264,7 +267,7 @@ export async function investAction(
   revalidateWallet();
   return {
     ok: true,
-    message: `${plan.name} activated — ${plan.daily.toLocaleString()} will credit daily for ${plan.days} days, each day maturing at 22:00 EAT.`,
+    message: `${plan.name} activated — ${plan.daily.toLocaleString()} will credit daily for ${plan.days} days, each day maturing at ${earningsMatureAt} EAT.`,
   };
 }
 

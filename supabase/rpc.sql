@@ -1222,11 +1222,11 @@ $$;
 revoke all on function public.vanta_handle_gateway_event(jsonb)
   from public, anon, authenticated;
 
--- ── Cron: pay every due investment ─────────────────────────────────────────
--- Scheduled at the earnings_mature_at hour (22:00 Africa/Kampala by default,
--- vercel.json). Investments owed several days — because the job was down or a
--- run failed — catch up one matured day per pass, so a missed night never
--- silently forfeits credits that had already accrued.
+-- ── Schedule: pay every due investment ─────────────────────────────────────
+-- Fired by the Vercel Schedule in vercel.json at the earnings_mature_at hour
+-- (22:00 Africa/Kampala). The inner loop pays every matured day of an
+-- investment in one pass, so an outage or a missed night is caught up in full
+-- on the next run — accrued credits are never silently forfeited.
 create or replace function public.vanta_run_daily_payouts(p_limit integer default 500)
 returns integer
 language plpgsql

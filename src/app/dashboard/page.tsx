@@ -200,7 +200,7 @@ export default async function OverviewPage() {
         ) : (
           <EmptyState
             title="No active cycles yet"
-            body="Activate one of the five VANTAFINTECH plans and the first daily earning matures the same evening at 22:00 (Kampala time)."
+            body={`Activate one of the five VANTAFINTECH plans and the first daily earning matures that night at ${earningsMatureAt} (Kampala time).`}
             cta={
               <ButtonLink href="/dashboard/plans" variant="primary" size="sm">
                 Choose a plan

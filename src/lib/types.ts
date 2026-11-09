@@ -34,7 +34,7 @@ export type InvestmentRow = {
   status: "active" | "completed";
   started_at: string;
   ends_at: string;
-  /** when the next daily credit unlocks (22:00 Africa/Kampala) */
+  /** when the next daily credit unlocks (earnings_mature_at, Africa/Kampala) */
   next_maturity_at?: string | null;
 };
 

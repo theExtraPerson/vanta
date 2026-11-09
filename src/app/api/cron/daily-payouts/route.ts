@@ -5,13 +5,16 @@ import { reconcileOpenPayments } from "@/lib/payments/reconcile";
 export const dynamic = "force-dynamic";
 
 /**
- * Daily money job — scheduled in vercel.json at 19:00 UTC, which is 22:00
- * Africa/Kampala: that is when the day's earnings mature (earnings_mature_at
- * setting, enforced by vanta_maturity_at). It credits every due investment and
- * then sweeps the gateway for movements that are still marked open, so a
- * callback lost in transit never leaves an investor waiting. Vercel Cron
- * attaches the CRON_SECRET bearer token automatically; manual calls must pass
- * it themselves.
+ * Daily money job — fired by the Vercel Schedule in vercel.json at 22:00
+ * Africa/Kampala, the earnings_mature_at hour enforced by vanta_maturity_at.
+ * The schedule's jitter runs it a minute or so after the stroke, when the
+ * day's earnings have definitely come due. vanta_run_daily_payouts pays every
+ * matured day of every active investment in one pass, so a night the job
+ * missed is caught up in full on the next run. It then sweeps the gateway for
+ * movements that are still marked open, so a callback lost in transit never
+ * leaves an investor waiting. The schedule targets this route over GET and
+ * Vercel attaches the CRON_SECRET bearer token; manual calls must pass it
+ * themselves.
  *
  * GET /api/cron/daily-payouts
  *   headers: { authorization: "Bearer <CRON_SECRET>" }
