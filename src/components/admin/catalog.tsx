@@ -389,24 +389,6 @@ export function SettingsSection({
       </div>
 
       <div>
-        <SectionLabel>Payout routing</SectionLabel>
-        <ChoiceSetting
-          label="Withdrawals are paid by"
-          keyName="withdrawal_mode"
-          value={String(settings.withdrawal_mode ?? "api")}
-          options={[
-            { value: "api", label: "Gateway API (Shashura disbursement)" },
-            { value: "manual", label: "The desk — operator pays the member directly" },
-          ]}
-        />
-        <p className="mt-2 text-[10px] leading-relaxed text-slate-deep">
-          Gateway pushes the net through Shashura the moment the member submits. Desk mode keeps
-          every request pending in the Withdrawals queue until an operator marks it paid — the fee
-          is still cut either way.
-        </p>
-      </div>
-
-      <div>
         <SectionLabel>Telegram channels</SectionLabel>
         <div className="space-y-2">
           <UrlSetting label="Official community group" keyName="telegram_community" value={String(settings.telegram_community ?? "https://t.me/M")} />
@@ -434,12 +416,8 @@ export function SettingsSection({
             <KeyValue label="Minimum deposit">{ugx(rules.min_deposit)}</KeyValue>
             <KeyValue label="Minimum withdrawal">{ugx(rules.min_withdrawal)}</KeyValue>
             <KeyValue label="Withdrawal fee">{rules.withdrawal_fee_percent ?? 16}%</KeyValue>
-            <KeyValue label="Payout route">
-              {rules.withdrawal_mode === "manual" ? (
-                <Chip tone="wait">Manual desk</Chip>
-              ) : (
-                <Chip tone="good">Gateway API</Chip>
-              )}
+            <KeyValue label="Payout approval">
+              <Chip tone="wait">Admin, per request</Chip>
             </KeyValue>
             <KeyValue label="Earnings mature">{rules.earnings_mature_at} {rules.timezone}</KeyValue>
             <KeyValue label="Withdrawal window">
@@ -552,55 +530,6 @@ function TextSetting({ label, keyName, value }: { label: string; keyName: string
   return <InlineSetting label={label} keyName={keyName} initial={value} parse={(raw) => (raw ? raw : null)} hint="" />;
 }
 
-function ChoiceSetting({
-  label,
-  keyName,
-  value,
-  options,
-}: {
-  label: string;
-  keyName: string;
-  value: string;
-  options: { value: string; label: string }[];
-}) {
-  const router = useRouter();
-  const [draft, setDraft] = useState(value);
-  const [state, setState] = useState<ActionState | null>(null);
-  const [pending, setPending] = useState(false);
-
-  const save = async () => {
-    setPending(true);
-    const next = await setSettingAction(keyName, draft);
-    setPending(false);
-    setState(next);
-    if (next.ok) router.refresh();
-  };
-
-  return (
-    <div className="surface rounded-xl px-3.5 py-3">
-      <p className="font-display text-[9px] font-bold tracking-[0.14em] text-slate-deep uppercase">{label}</p>
-      <div className="mt-1.5 flex gap-2">
-        <select
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          className={`${inputSm} bg-navy-900/70`}
-          aria-label={keyName}
-        >
-          {options.map((o) => (
-            <option key={o.value} value={o.value}>
-              {o.label}
-            </option>
-          ))}
-        </select>
-        <button type="button" onClick={save} disabled={pending || draft === value} className={btnXs + " btn-primary"}>
-          Save
-        </button>
-      </div>
-      {state && <div className="mt-2"><FormAlert state={state} /></div>}
-    </div>
-  );
-}
-
 function InlineSetting({
   label,
   keyName,
@@ -688,6 +617,7 @@ const ACTION_WORDS: Record<string, string> = {
   reject_deposit: "Deposit written off",
   settle_withdrawal: "Payout settled",
   reject_withdrawal: "Withdrawal refused",
+  disburse_withdrawal: "Payout pushed via gateway",
   adjust_wallet: "Wallet corrected",
   ban_member: "Account restricted",
   unban_member: "Restriction lifted",

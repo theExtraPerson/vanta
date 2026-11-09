@@ -8,6 +8,7 @@ import {
   rejectDepositAction,
   settleWithdrawalAction,
   rejectWithdrawalAction,
+  disburseWithdrawalAction,
   adjustWalletAction,
   setBanAction,
   loadMemberDetailAction,
@@ -137,6 +138,8 @@ export function DepositsSection({ deposits }: { deposits: AdminDeposit[] }) {
 
 function WithdrawalCard({ w }: { w: AdminWithdrawal }) {
   const reviewable = w.status === "pending" || w.status === "processing";
+  const queued = w.status === "pending";
+  const [runDisburse, stateD, pendingD] = useRefreshAction(disburseWithdrawalAction);
   const [runSettle, stateS, pendingS] = useRefreshAction(settleWithdrawalAction);
   const [runReject, stateR, pendingR] = useRefreshAction(rejectWithdrawalAction);
 
@@ -178,13 +181,25 @@ function WithdrawalCard({ w }: { w: AdminWithdrawal }) {
         reviewable ? (
           <div className="space-y-2">
             <p className="text-[10px] leading-relaxed text-slate-deep">
-              Pay {ugx(w.net_amount ?? w.amount)} to {w.msisdn ?? "the member's registered number"} first,
-              then settle.
+              Approve to pay {ugx(w.net_amount ?? w.amount)} to{" "}
+              {w.msisdn ?? "the member's registered number"} — push it through the gateway or
+              settle it after paying by hand.
             </p>
+            {queued && (
+              <>
+                <form action={runDisburse}>
+                  <input type="hidden" name="id" value={w.id} />
+                  <button type="submit" disabled={pendingD} className={`${btnXs} btn-primary w-full`}>
+                    Approve &amp; pay via Gateway API
+                  </button>
+                </form>
+                <FormAlert state={stateD} />
+              </>
+            )}
             <form action={runSettle}>
               <input type="hidden" name="id" value={w.id} />
               <button type="submit" disabled={pendingS} className={`${btnXs} btn-gold w-full`}>
-                Paid — mark settled
+                Paid by hand — mark settled
               </button>
             </form>
             <FormAlert state={stateS} />

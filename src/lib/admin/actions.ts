@@ -3,10 +3,18 @@
 import { revalidatePath } from "next/cache";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createServerSupabase } from "@/lib/supabase/server";
+import { createAdminSupabase } from "@/lib/supabase/admin";
 import { isSupabaseConfigured } from "@/lib/supabase/config";
 import { isSessionAdmin } from "@/lib/admin/data";
 import { getMemberDetail } from "@/lib/admin/data";
 import type { AdminMemberDetail } from "@/lib/admin/types";
+import { ugx } from "@/lib/format";
+import {
+  disburse,
+  GatewayError,
+  isPaymentsConfigured,
+  stateFromGateway,
+} from "@/lib/payments/shashura";
 import type { ActionState } from "@/lib/actions";
 
 /**
@@ -27,6 +35,9 @@ const HINTS: Record<string, string> = {
   FORBIDDEN: "This desk is for platform operators only.",
   DEPOSIT_NOT_FOUND: "That deposit no longer exists.",
   WITHDRAWAL_NOT_FOUND: "That withdrawal no longer exists.",
+  PAYOUT_NOT_QUEUED: "That payout already left the queue — reload the desk.",
+  PAYOUT_SUBMISSION_IN_PROGRESS:
+    "A gateway push for this payout is already in flight — check its result first, then retry or pay by hand.",
   DEPOSIT_ALREADY_REVIEWED: "That deposit has already been settled.",
   DEPOSIT_REJECTED: "That deposit was already written off.",
   PROFILE_NOT_FOUND: "No such member.",
@@ -126,6 +137,81 @@ export async function rejectWithdrawalAction(fd: FormData): Promise<ActionState>
 
   revalidateAdmin();
   return { ok: true, message: "Withdrawal refused — the hold is back in the wallet." };
+}
+
+/**
+ * Pay a queued payout through the gateway. The RPC claims the request under
+ * a row lock (double submissions are impossible) and returns the figures;
+ * the server then pushes the NET to /disburse and records the outcome through
+ * vanta_set_withdrawal_gateway, which settles on TS or refunds the hold on TF.
+ * MTN stays PENDING until the callback lands — the row remains in the queue.
+ */
+export async function disburseWithdrawalAction(fd: FormData): Promise<ActionState> {
+  if (!isPaymentsConfigured) {
+    return fail("The mobile money provider is not configured on this deployment — pay this request by hand and mark it settled.");
+  }
+
+  const desk_ = await desk();
+  if ("state" in desk_) return desk_.state;
+
+  const { data, error } = await desk_.client.rpc("vanta_admin_disburse_withdrawal", {
+    p_withdrawal_id: str(fd, "id"),
+  });
+  if (error) return toState(error.message);
+
+  const request = data as unknown as {
+    withdrawal_id: string;
+    reference: string;
+    msisdn: string;
+    fee?: number;
+    net_amount: number;
+  };
+
+  const admin = createAdminSupabase();
+  if (!admin) return fail(NOT_CONFIGURED);
+
+  const record = async (state: string, tid: string | null, code: string | null, message: string | null) => {
+    const { error: recErr } = await admin.rpc("vanta_set_withdrawal_gateway", {
+      p_withdrawal_id: request.withdrawal_id,
+      p_tid: tid,
+      p_state: state,
+      p_code: code,
+      p_message: message,
+      p_charge: null,
+    });
+    if (recErr) console.error("[vanta] recording gateway outcome failed:", recErr.message);
+  };
+
+  try {
+    const pushed = await disburse({
+      msisdn: request.msisdn,
+      amount: request.net_amount,
+      reference: request.reference,
+      remarks: `Vanta withdrawal ${request.reference}`,
+    });
+
+    const state = stateFromGateway(pushed.status);
+    await record(state, pushed.tid ?? null, null, null);
+    revalidateAdmin();
+
+    if (state === "TS") {
+      return { ok: true, message: `${ugx(request.net_amount)} paid via the gateway.` };
+    }
+    return {
+      ok: true,
+      message: `${ugx(request.net_amount)} sent to the network — it settles when the provider confirms. The request stays in the queue until then.`,
+    };
+  } catch (err) {
+    const gateway = err instanceof GatewayError ? err : null;
+    await record("TF", null, gateway?.code ?? "GATEWAY_ERROR", gateway?.message ?? "The payment provider did not answer.");
+    revalidateAdmin();
+
+    return fail(
+      gateway
+        ? `The network refused the payout (${gateway.message}). The hold was returned to the member's wallet.`
+        : "We could not reach the payment provider — the request was closed and the hold returned to the member's wallet. They can request again once the provider is known to be reachable.",
+    );
+  }
 }
 
 /* ── Members ─────────────────────────────────────────────────────────────── */

@@ -77,7 +77,6 @@ insert into public.platform_settings (key, value) values
   ('withdrawal_opens_at',  '"09:00"'::jsonb),
   ('withdrawal_closes_at', '"22:00"'::jsonb),
   ('withdrawal_fee_percent', '16'::jsonb),
-  ('withdrawal_mode',      '"api"'::jsonb),
   ('earnings_mature_at',   '"22:00"'::jsonb),
   ('telegram_community',   '"https://t.me/M"'::jsonb),
   ('telegram_support',     '"https://t.me/Micron"'::jsonb),
@@ -596,6 +595,60 @@ begin
 end;
 $$;
 
+-- Approve a queued payout through the gateway. Verifies the operator, claims
+-- the request (a submission already in flight cannot be pushed twice) and
+-- hands the app server the exact figures for /disburse of the NET amount; the
+-- outcome is recorded through vanta_set_withdrawal_gateway, which settles or
+-- refunds it. Until a result lands the row stays in the queue, where the desk
+-- can still settle by hand or refuse it.
+create or replace function public.vanta_admin_disburse_withdrawal(p_withdrawal_id uuid)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_uid  uuid;
+  v_wd   public.withdrawals%rowtype;
+  v_net  numeric(14, 2);
+begin
+  v_uid := public.vanta_admin_guard();
+
+  select * into v_wd from public.withdrawals where id = p_withdrawal_id for update;
+  if not found then
+    raise exception 'WITHDRAWAL_NOT_FOUND';
+  end if;
+  if v_wd.status <> 'pending' then
+    raise exception 'PAYOUT_NOT_QUEUED: %', v_wd.status;
+  end if;
+  if v_wd.gateway_state = 'SUBMITTING' then
+    raise exception 'PAYOUT_SUBMISSION_IN_PROGRESS: confirm with the gateway before retrying or settling by hand';
+  end if;
+
+  v_net := v_wd.amount - coalesce(v_wd.fee, 0);
+
+  -- claim the row and make it gateway-queryable before the HTTP push
+  update public.withdrawals
+     set gateway_state = 'SUBMITTING',
+         tid           = coalesce(tid, v_wd.reference)
+   where id = v_wd.id;
+
+  insert into public.admin_audit_log(admin_id, action, entity_id, payload)
+  values (v_uid, 'disburse_withdrawal', v_wd.id,
+          jsonb_build_object('reference', v_wd.reference, 'user_id', v_wd.user_id,
+                             'amount', v_wd.amount, 'fee', coalesce(v_wd.fee, 0), 'net', v_net));
+
+  return jsonb_build_object(
+    'withdrawal_id', v_wd.id,
+    'reference',     v_wd.reference,
+    'msisdn',        v_wd.msisdn,
+    'amount',        v_wd.amount,
+    'fee',           coalesce(v_wd.fee, 0),
+    'net_amount',    v_net
+  );
+end;
+$$;
+
 -- Manual wallet correction. p_delta is signed shillings (credit +, debit −).
 create or replace function public.vanta_admin_adjust_wallet(
   p_user_id uuid,
@@ -932,6 +985,7 @@ grant execute on function public.vanta_admin_approve_deposit(uuid, text)        
 grant execute on function public.vanta_admin_reject_deposit(uuid, text)           to authenticated;
 grant execute on function public.vanta_admin_settle_withdrawal(uuid, text)        to authenticated;
 grant execute on function public.vanta_admin_reject_withdrawal(uuid, text)        to authenticated;
+grant execute on function public.vanta_admin_disburse_withdrawal(uuid)            to authenticated;
 grant execute on function public.vanta_admin_adjust_wallet(uuid, numeric, text)   to authenticated;
 grant execute on function public.vanta_admin_set_ban(uuid, boolean, text)         to authenticated;
 grant execute on function public.vanta_admin_upsert_plan(text, text, numeric, numeric, integer, text, boolean) to authenticated;

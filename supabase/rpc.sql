@@ -9,7 +9,7 @@
 --   vanta_create_investment(p_plan_slug)               -> activation
 --   vanta_claim_earnings(p_investment_id)              -> one daily credit
 --   vanta_start_deposit(p_amount, p_msisdn, p_method)  -> opens a MoMo prompt
---   vanta_start_withdrawal(p_amount, p_msisdn)         -> holds + pushes a payout
+--   vanta_start_withdrawal(p_amount, p_msisdn)         -> holds + queues for the desk
 --
 --  Server-only (called with the service role key)
 --  ---------------------------------------------
@@ -171,7 +171,6 @@ begin
     'withdrawal_opens_at',   public.vanta_setting_text('withdrawal_opens_at', '09:00'),
     'withdrawal_closes_at',  public.vanta_setting_text('withdrawal_closes_at', '22:00'),
     'withdrawal_fee_percent', public.vanta_setting_number('withdrawal_fee_percent', 16),
-    'withdrawal_mode',       coalesce(nullif(lower(public.vanta_setting_text('withdrawal_mode', 'api')), ''), 'api'),
     'withdrawals_open',      public.vanta_within_withdrawal_window()
   );
 exception when others then
@@ -181,7 +180,7 @@ exception when others then
     'min_deposit', 10000, 'min_withdrawal', 5000,
     'earnings_mature_at', '22:00',
     'withdrawal_opens_at', '09:00', 'withdrawal_closes_at', '22:00',
-    'withdrawal_fee_percent', 16, 'withdrawal_mode', 'api',
+    'withdrawal_fee_percent', 16,
     'withdrawals_open', public.vanta_local_now()::time >= time '09:00'
                          and public.vanta_local_now()::time < time '22:00'
   );
@@ -907,11 +906,12 @@ revoke all on function public.vanta_settle_disbursement(uuid, text, text, numeri
 revoke all on function public.vanta_fail_disbursement(uuid, text, text, text)
   from public, anon, authenticated;
 
--- Opens a payout: rules first, then the hold, then the reference the app
--- sends to /disburse. The platform fee (withdrawal_fee_percent, default 16%)
--- is cut here so the member is paid the net, and the withdrawal carries the
--- route the desk chose: 'api' lets the app push /disburse, 'manual' leaves it
--- pending for an operator to pay the member directly and mark it settled.
+-- Opens a payout: rules first, then the hold, then the reference the desk
+-- later sends to /disburse. The platform fee (withdrawal_fee_percent, default
+-- 16%) is cut here so the member is paid the net. Nothing is pushed from the
+-- member side: every request waits in the Withdrawals queue until an operator
+-- approves it and picks the route there — vanta_admin_disburse_withdrawal for
+-- the gateway, or the manual settle for a direct payment.
 create or replace function public.vanta_start_withdrawal(
   p_amount numeric,
   p_msisdn text,
@@ -932,7 +932,6 @@ declare
   v_pct     numeric;
   v_fee     numeric(14, 2);
   v_net     numeric(14, 2);
-  v_mode    text;
 begin
   if v_uid is null then
     raise exception 'NOT_AUTHENTICATED';
@@ -973,14 +972,10 @@ begin
     raise exception 'INSUFFICIENT_BALANCE: available %', v_balance;
   end if;
 
-  -- fee and payout route, both admin-editable at runtime
+  -- fee comes from the desk settings, live
   v_pct  := public.vanta_setting_number('withdrawal_fee_percent', 16);
   v_fee  := trunc(p_amount * v_pct / 100, 2);
   v_net  := p_amount - v_fee;
-  v_mode := lower(coalesce(public.vanta_setting_text('withdrawal_mode', 'api'), 'api'));
-  if v_mode not in ('api', 'manual') then
-    v_mode := 'api';
-  end if;
 
   -- hold the funds while the payout is in flight
   update public.profiles
@@ -1009,8 +1004,8 @@ begin
     coalesce(nullif(trim(p_method), ''), 'MTN MoMo') || ' · ' || v_number
       || ' · fee ' || to_char(v_fee, 'FM999,999,999')
       || ' · pays ' || to_char(v_net, 'FM999,999,999')
-      || case when v_mode = 'manual' then ' · desk payout' else ' · processing' end,
-    jsonb_build_object('withdrawal_id', v_wd.id, 'channel', v_mode,
+      || ' · awaiting approval',
+    jsonb_build_object('withdrawal_id', v_wd.id, 'channel', 'queued',
                        'fee', v_fee, 'net', v_net)
   );
 
@@ -1020,7 +1015,6 @@ begin
     'amount',        v_wd.amount,
     'fee',           v_fee,
     'net_amount',    v_net,
-    'mode',          v_mode,
     'msisdn',        v_number,
     'method',        v_wd.method
   );

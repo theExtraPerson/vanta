@@ -54,6 +54,12 @@ async function sweep(
 
   if (userId) query = query.eq("user_id", userId);
 
+  if (table === "withdrawals") {
+    // Requests still awaiting desk approval have never reached the gateway —
+    // only sweep ones that were actually submitted (the admin claim sets tid).
+    query = query.not("tid", "is", null);
+  }
+
   const { data, error } = await query;
   if (error) {
     console.error(`[vanta] reconcile ${table} query failed:`, error.message);

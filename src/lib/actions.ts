@@ -18,7 +18,6 @@ import { createServerSupabase } from "@/lib/supabase/server";
 import { planBySlug } from "@/lib/plans";
 import { ugx } from "@/lib/format";
 import {
-  disburse,
   GatewayError,
   isPaymentsConfigured,
   normalizeMsisdn,
@@ -367,13 +366,12 @@ export async function depositAction(
 }
 
 /**
- * Withdrawal. The RPC checks the rules, cuts the platform fee
+ * Withdrawal request. The RPC checks the rules, cuts the platform fee
  * (withdrawal_fee_percent, published default 16%) and holds the gross amount.
- * Then the route depends on the admin's withdrawal_mode setting:
- * - "api"    → SHASHURA disbursement of the net. Airtel settles on the
- *   response; MTN settles on the callback; any failure returns the hold.
- * - "manual" → nothing is pushed. The request stays pending on the payout
- *   desk, an operator pays the member directly and marks it settled.
+ * Nothing is paid from here: the request waits in the payout desk queue,
+ * where an admin approves it and chooses the route — a gateway disbursement
+ * of the net (vanta_admin_disburse_withdrawal) or a direct manual payment.
+ * A refused request returns the hold to the wallet.
  */
 export async function withdrawAction(
   _prev: ActionState | undefined,
@@ -401,91 +399,20 @@ export async function withdrawAction(
   if (error) return fromDbError(error.message);
 
   const request = data as unknown as {
-    withdrawal_id: string;
     reference: string;
     amount: number;
     fee?: number;
     net_amount?: number;
-    mode?: string;
     msisdn: string;
   };
   const fee = request.fee ?? 0;
   const net = request.net_amount ?? request.amount;
 
-  // Manual desk route: no gateway call. The hold stays held, the request
-  // waits in the payout queue and the operator settles it after paying.
-  if (request.mode === "manual") {
-    revalidateWallet();
-    return {
-      ok: true,
-      message: `${ugx(net)} is queued for the payout desk (fee ${ugx(fee)} already cut). An operator will pay ${request.msisdn} directly and confirm it here.`,
-    };
-  }
-
-  if (!isPaymentsConfigured) {
-    await rpcAsAdmin("vanta_set_withdrawal_gateway", {
-      p_withdrawal_id: request.withdrawal_id,
-      p_tid: null,
-      p_state: "TF",
-      p_code: "NOT_CONFIGURED",
-      p_message: "Payment provider keys are missing on this deployment.",
-      p_charge: null,
-    });
-    revalidateWallet();
-    return fail(NO_GATEWAY);
-  }
-
-  try {
-    const pushed = await disburse({
-      msisdn: request.msisdn,
-      amount: net,
-      reference: request.reference,
-      remarks: `Vanta withdrawal ${request.reference}`,
-    });
-
-    const state = stateFromGateway(pushed.status);
-    await rpcAsAdmin("vanta_set_withdrawal_gateway", {
-      p_withdrawal_id: request.withdrawal_id,
-      p_tid: pushed.tid,
-      p_state: state,
-      p_code: null,
-      p_message: null,
-      p_charge: pushed.charge ?? null,
-    });
-    revalidateWallet();
-
-    if (state === "TS") {
-      return {
-        ok: true,
-        message: `${ugx(net)} paid out to ${request.msisdn} (fee ${ugx(fee)} cut).`,
-      };
-    }
-
-    return {
-      ok: true,
-      message: `${ugx(net)} is on its way to ${request.msisdn}. ${
-        pushed.message ?? "We confirm it as soon as the network replies."
-      }`,
-    };
-  } catch (err) {
-    const gateway = err instanceof GatewayError ? err : null;
-
-    await rpcAsAdmin("vanta_set_withdrawal_gateway", {
-      p_withdrawal_id: request.withdrawal_id,
-      p_tid: null,
-      p_state: "TF",
-      p_code: gateway?.code ?? "GATEWAY_ERROR",
-      p_message: gateway?.message ?? "The payment provider did not answer.",
-      p_charge: null,
-    });
-    revalidateWallet();
-
-    return fail(
-      gateway
-        ? `${gateway.message} The amount stayed in your wallet.`
-        : "We could not reach the payment provider. Your balance is untouched — please try again.",
-    );
-  }
+  revalidateWallet();
+  return {
+    ok: true,
+    message: `${ugx(net)} queued for approval (fee ${ugx(fee)} cut). An admin will approve it and pay ${request.msisdn} through the network or by hand.`,
+  };
 }
 
 /**

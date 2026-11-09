@@ -56,7 +56,6 @@ export default async function WalletPage({
   const rules = data.payments?.rules;
   const withdrawalsOpen = rules?.withdrawals_open ?? true;
   const feePercent = rules?.withdrawal_fee_percent ?? withdrawalFeePercent;
-  const manualPayouts = rules?.withdrawal_mode === "manual";
   const openDeposits = data.payments?.awaiting_deposit ?? [];
   const openPayouts = data.payments?.awaiting_payout ?? [];
 
@@ -119,7 +118,7 @@ export default async function WalletPage({
               {openPayouts.map((w) => (
                 <li key={w.id} className="flex items-center justify-between gap-2">
                   <span className="truncate">
-                    Payout sending to {w.msisdn ?? "your number"} ·{" "}
+                    {w.status === "pending" ? "Payout awaiting admin approval" : "Payout sending"} to {w.msisdn ?? "your number"} ·{" "}
                     <span className="font-mono text-[10.5px] text-slate-deep">{w.reference}</span>
                   </span>
                   <span className="font-display font-bold text-royal-light">{ugx(w.amount)}</span>
@@ -196,7 +195,6 @@ export default async function WalletPage({
                   defaultPhone={data.profile.phone}
                   open={withdrawalsOpen}
                   feePercent={feePercent}
-                  manual={manualPayouts}
                 />
               </section>
 
@@ -217,11 +215,9 @@ export default async function WalletPage({
                     the net.
                   </li>
                   <li>
-                    ·{" "}
-                    {manualPayouts
-                      ? "payouts run through the desk right now: an operator pays your number directly and confirms it"
-                      : "Airtel settles on the spot; MTN confirms seconds later. A declined payout is returned to your balance immediately"}
-                    .
+                    · Every payout is held on submission, approved by an admin, then paid through
+                    the network or by the payout desk — a refused request returns the hold to your
+                    balance.
                   </li>
                 </ul>
                 {openPayouts.length > 0 && (

@@ -212,7 +212,6 @@ export function WithdrawForm({
   defaultPhone,
   open = true,
   feePercent = 16,
-  manual = false,
 }: {
   balance: number;
   defaultPhone?: string | null;
@@ -220,8 +219,6 @@ export function WithdrawForm({
   open?: boolean;
   /** Platform payout fee from the withdrawal_fee_percent setting. */
   feePercent?: number;
-  /** withdrawal_mode = manual: an operator pays the member directly. */
-  manual?: boolean;
 }) {
   const [state, action, pending] = useActionState<State, FormData>(withdrawAction, undefined);
   const [amount, setAmount] = useState("");
@@ -307,21 +304,20 @@ export function WithdrawForm({
         type="tel"
         defaultValue={defaultPhone ?? ""}
         placeholder="+256 7XX XXX XXX"
-        hint={manual
-          ? "The desk pays this number by hand — keep it exact"
-          : "Airtel clears instantly; MTN confirms a few seconds later"}
+        hint="Every payout is approved by an admin — keep this number exact"
         required
         error={state?.field === "phone" ? state.message : undefined}
       />
 
       <Button type="submit" variant="primary" size="lg" className="w-full" disabled={pending}>
-        {pending ? (manual ? "Queueing payout…" : "Sending payout…") : "Withdraw now"}
+        {pending ? "Queueing request…" : "Request withdrawal"}
       </Button>
 
       <p className="text-[11px] leading-relaxed text-slate-deep">
-        {manual
-          ? `${feePercent}% fee is cut and the amount is held from your balance as soon as you submit. A payout operator pays the net to your number directly and confirms it on the desk — refuse it and the hold goes back to your wallet.`
-          : `The amount is held from your balance as soon as you submit; ${feePercent}% fee is cut and the net leaves to your number. If the network declines the payout, the hold goes straight back to your wallet.`}
+        The amount is held from your balance as soon as you submit and the {feePercent}% fee is
+        cut. An admin approves the request, then the net is paid to your number — automatically
+        through the network or by the payout desk. If it is refused, the hold goes straight back
+        to your wallet.
       </p>
     </form>
   );
