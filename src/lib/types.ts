@@ -47,6 +47,10 @@ export type PaymentRules = {
   earnings_mature_at: string;
   withdrawal_opens_at: string;
   withdrawal_closes_at: string;
+  /** Percent of the gross withdrawal kept by the platform before payout. */
+  withdrawal_fee_percent?: number;
+  /** 'api' = Shashura disbursements, 'manual' = the desk pays members directly. */
+  withdrawal_mode?: string;
   withdrawals_open: boolean;
 };
 

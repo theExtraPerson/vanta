@@ -76,6 +76,8 @@ insert into public.platform_settings (key, value) values
   ('registration_bonus',   '1000'::jsonb),
   ('withdrawal_opens_at',  '"09:00"'::jsonb),
   ('withdrawal_closes_at', '"22:00"'::jsonb),
+  ('withdrawal_fee_percent', '16'::jsonb),
+  ('withdrawal_mode',      '"api"'::jsonb),
   ('earnings_mature_at',   '"22:00"'::jsonb),
   ('telegram_community',   '"https://t.me/M"'::jsonb),
   ('telegram_support',     '"https://t.me/Micron"'::jsonb),
@@ -283,9 +285,8 @@ begin
                              where status in ('credited', 'approved')), 0),
       'withdrawals_paid',  coalesce((select sum(amount) from public.withdrawals
                              where status in ('paid', 'processed')), 0),
-      'fees_collected',    coalesce((select sum(charge) from public.deposits
-                             where status in ('credited', 'approved')), 0)
-                       + coalesce((select sum(charge) from public.withdrawals
+      -- what the platform actually collects: the withdrawal fee on settled payouts
+      'fees_collected',    coalesce((select sum(fee) from public.withdrawals
                              where status in ('paid', 'processed')), 0),
       'returns_paid',      coalesce((select sum(amount) from public.transactions
                              where type in ('earning', 'capital_return') and status = 'completed'), 0),
@@ -341,7 +342,7 @@ begin
         select w.id, w.user_id,
                coalesce(p.full_name, '—') as name, p.username,
                w.amount, w.method, w.msisdn, w.network, w.charge,
-               (w.amount - coalesce(w.charge, 0)) as net_amount,
+               (w.amount - coalesce(w.fee, 0)) as net_amount,
                w.status, w.reference, w.tid, w.failure_message,
                w.created_at, w.settled_at
         from public.withdrawals w

@@ -376,6 +376,7 @@ export function SettingsSection({
         <div className="grid grid-cols-2 gap-2">
           <MoneySetting label="Minimum deposit" keyName="min_deposit" value={Number(settings.min_deposit ?? 10000)} />
           <MoneySetting label="Minimum withdrawal" keyName="min_withdrawal" value={Number(settings.min_withdrawal ?? 5000)} />
+          <PercentSetting label="Withdrawal fee %" keyName="withdrawal_fee_percent" value={Number(settings.withdrawal_fee_percent ?? 16)} />
           <MoneySetting label="Registration bonus" keyName="registration_bonus" value={Number(settings.registration_bonus ?? 1000)} />
           <TimeSetting label="Withdrawals open at" keyName="withdrawal_opens_at" value={String(settings.withdrawal_opens_at ?? "09:00")} />
           <TimeSetting label="Withdrawals close at" keyName="withdrawal_closes_at" value={String(settings.withdrawal_closes_at ?? "22:00")} />
@@ -384,6 +385,24 @@ export function SettingsSection({
         <p className="mt-2 text-[10px] leading-relaxed text-slate-deep">
           Times are on the platform clock (Africa/Kampala). Changes apply to the next request — the
           money RPCs read these live.
+        </p>
+      </div>
+
+      <div>
+        <SectionLabel>Payout routing</SectionLabel>
+        <ChoiceSetting
+          label="Withdrawals are paid by"
+          keyName="withdrawal_mode"
+          value={String(settings.withdrawal_mode ?? "api")}
+          options={[
+            { value: "api", label: "Gateway API (Shashura disbursement)" },
+            { value: "manual", label: "The desk — operator pays the member directly" },
+          ]}
+        />
+        <p className="mt-2 text-[10px] leading-relaxed text-slate-deep">
+          Gateway pushes the net through Shashura the moment the member submits. Desk mode keeps
+          every request pending in the Withdrawals queue until an operator marks it paid — the fee
+          is still cut either way.
         </p>
       </div>
 
@@ -414,6 +433,14 @@ export function SettingsSection({
           <dl className="space-y-1.5">
             <KeyValue label="Minimum deposit">{ugx(rules.min_deposit)}</KeyValue>
             <KeyValue label="Minimum withdrawal">{ugx(rules.min_withdrawal)}</KeyValue>
+            <KeyValue label="Withdrawal fee">{rules.withdrawal_fee_percent ?? 16}%</KeyValue>
+            <KeyValue label="Payout route">
+              {rules.withdrawal_mode === "manual" ? (
+                <Chip tone="wait">Manual desk</Chip>
+              ) : (
+                <Chip tone="good">Gateway API</Chip>
+              )}
+            </KeyValue>
             <KeyValue label="Earnings mature">{rules.earnings_mature_at} {rules.timezone}</KeyValue>
             <KeyValue label="Withdrawal window">
               {rules.withdrawal_opens_at}–{rules.withdrawal_closes_at}
@@ -482,6 +509,21 @@ function MoneySetting({ label, keyName, value }: { label: string; keyName: strin
   );
 }
 
+function PercentSetting({ label, keyName, value }: { label: string; keyName: string; value: number }) {
+  return (
+    <InlineSetting
+      label={label}
+      keyName={keyName}
+      initial={String(value)}
+      parse={(raw) => {
+        const n = Number(raw);
+        return Number.isInteger(n) && n >= 0 && n <= 90 ? n : null;
+      }}
+      hint="whole percent, 0–90"
+    />
+  );
+}
+
 function TimeSetting({ label, keyName, value }: { label: string; keyName: string; value: string }) {
   return (
     <InlineSetting
@@ -508,6 +550,55 @@ function UrlSetting({ label, keyName, value }: { label: string; keyName: string;
 
 function TextSetting({ label, keyName, value }: { label: string; keyName: string; value: string }) {
   return <InlineSetting label={label} keyName={keyName} initial={value} parse={(raw) => (raw ? raw : null)} hint="" />;
+}
+
+function ChoiceSetting({
+  label,
+  keyName,
+  value,
+  options,
+}: {
+  label: string;
+  keyName: string;
+  value: string;
+  options: { value: string; label: string }[];
+}) {
+  const router = useRouter();
+  const [draft, setDraft] = useState(value);
+  const [state, setState] = useState<ActionState | null>(null);
+  const [pending, setPending] = useState(false);
+
+  const save = async () => {
+    setPending(true);
+    const next = await setSettingAction(keyName, draft);
+    setPending(false);
+    setState(next);
+    if (next.ok) router.refresh();
+  };
+
+  return (
+    <div className="surface rounded-xl px-3.5 py-3">
+      <p className="font-display text-[9px] font-bold tracking-[0.14em] text-slate-deep uppercase">{label}</p>
+      <div className="mt-1.5 flex gap-2">
+        <select
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          className={`${inputSm} bg-navy-900/70`}
+          aria-label={keyName}
+        >
+          {options.map((o) => (
+            <option key={o.value} value={o.value}>
+              {o.label}
+            </option>
+          ))}
+        </select>
+        <button type="button" onClick={save} disabled={pending || draft === value} className={btnXs + " btn-primary"}>
+          Save
+        </button>
+      </div>
+      {state && <div className="mt-2"><FormAlert state={state} /></div>}
+    </div>
+  );
 }
 
 function InlineSetting({

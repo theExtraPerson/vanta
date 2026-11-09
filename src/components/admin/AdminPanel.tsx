@@ -187,7 +187,7 @@ function Overview({ data }: { data: AdminDashboard }) {
           <StatTile label="Wallet liability" value={ugx(o.wallet_liability, { compact: true })} tone="royal" sub="held in member wallets" />
           <StatTile label="Returns paid" value={ugx(o.returns_paid, { compact: true })} />
           <StatTile label="Commissions paid" value={ugx(o.commission_paid, { compact: true })} />
-          <StatTile label="Fees collected" value={ugx(o.fees_collected, { compact: true })} tone="mint" />
+          <StatTile label="Withdrawal fees" value={ugx(o.fees_collected, { compact: true })} tone="mint" sub="platform cut of settled payouts" />
         </div>
       </div>
 

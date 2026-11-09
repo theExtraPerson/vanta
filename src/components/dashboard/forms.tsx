@@ -211,14 +211,25 @@ export function WithdrawForm({
   balance,
   defaultPhone,
   open = true,
+  feePercent = 16,
+  manual = false,
 }: {
   balance: number;
   defaultPhone?: string | null;
   /** Server-side clock says whether the 09:00–22:00 window is currently open. */
   open?: boolean;
+  /** Platform payout fee from the withdrawal_fee_percent setting. */
+  feePercent?: number;
+  /** withdrawal_mode = manual: an operator pays the member directly. */
+  manual?: boolean;
 }) {
   const [state, action, pending] = useActionState<State, FormData>(withdrawAction, undefined);
   const [amount, setAmount] = useState("");
+
+  const gross = Number(amount);
+  const feeShown = Number.isFinite(gross) && gross >= minWithdrawal;
+  const fee = feeShown ? Math.floor(gross * feePercent) / 100 : 0;
+  const net = feeShown ? gross - fee : 0;
 
   return (
     <form action={action} className="space-y-4 pb-1">
@@ -228,7 +239,7 @@ export function WithdrawForm({
         <p className="micro-label">Available to withdraw</p>
         <p className="mt-1 font-display text-2xl font-bold text-gold">{ugx(balance)}</p>
         <p className="mt-1 text-[11px] text-slate-deep">
-          Minimum {ugx(minWithdrawal)} · open {withdrawalOpensAt}–{withdrawalClosesAt} EAT
+          Minimum {ugx(minWithdrawal)} · open {withdrawalOpensAt}–{withdrawalClosesAt} EAT · fee {feePercent}%
         </p>
         {!open && (
           <Pill tone="muted" className="mt-2">
@@ -250,6 +261,19 @@ export function WithdrawForm({
         required
         error={state?.field === "amount" ? state.message : undefined}
       />
+
+      {feeShown && (
+        <div className="rounded-xl border border-electric/12 bg-navy-900/50 px-3.5 py-2.5 text-[11.5px]">
+          <div className="flex items-baseline justify-between gap-3">
+            <span className="text-slate-deep">Platform fee ({feePercent}%)</span>
+            <span className="font-semibold text-gold">−{ugx(fee)}</span>
+          </div>
+          <div className="mt-1 flex items-baseline justify-between gap-3">
+            <span className="text-slate-deep">You receive</span>
+            <span className="font-display font-bold text-white">{ugx(net)}</span>
+          </div>
+        </div>
+      )}
 
       <button
         type="button"
@@ -283,18 +307,21 @@ export function WithdrawForm({
         type="tel"
         defaultValue={defaultPhone ?? ""}
         placeholder="+256 7XX XXX XXX"
-        hint="Airtel clears instantly; MTN confirms a few seconds later"
+        hint={manual
+          ? "The desk pays this number by hand — keep it exact"
+          : "Airtel clears instantly; MTN confirms a few seconds later"}
         required
         error={state?.field === "phone" ? state.message : undefined}
       />
 
       <Button type="submit" variant="primary" size="lg" className="w-full" disabled={pending}>
-        {pending ? "Sending payout…" : "Withdraw now"}
+        {pending ? (manual ? "Queueing payout…" : "Sending payout…") : "Withdraw now"}
       </Button>
 
       <p className="text-[11px] leading-relaxed text-slate-deep">
-        The amount is held from your balance as soon as you submit. If the network declines the
-        payout, it goes straight back to your wallet.
+        {manual
+          ? `${feePercent}% fee is cut and the amount is held from your balance as soon as you submit. A payout operator pays the net to your number directly and confirms it on the desk — refuse it and the hold goes back to your wallet.`
+          : `The amount is held from your balance as soon as you submit; ${feePercent}% fee is cut and the net leaves to your number. If the network declines the payout, the hold goes straight back to your wallet.`}
       </p>
     </form>
   );

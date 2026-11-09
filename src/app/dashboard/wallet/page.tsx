@@ -14,6 +14,7 @@ import {
   minDeposit,
   minWithdrawal,
   withdrawalClosesAt,
+  withdrawalFeePercent,
   withdrawalOpensAt,
 } from "@/lib/supabase/config";
 
@@ -54,6 +55,8 @@ export default async function WalletPage({
 
   const rules = data.payments?.rules;
   const withdrawalsOpen = rules?.withdrawals_open ?? true;
+  const feePercent = rules?.withdrawal_fee_percent ?? withdrawalFeePercent;
+  const manualPayouts = rules?.withdrawal_mode === "manual";
   const openDeposits = data.payments?.awaiting_deposit ?? [];
   const openPayouts = data.payments?.awaiting_payout ?? [];
 
@@ -192,6 +195,8 @@ export default async function WalletPage({
                   balance={data.wallet.balance}
                   defaultPhone={data.profile.phone}
                   open={withdrawalsOpen}
+                  feePercent={feePercent}
+                  manual={manualPayouts}
                 />
               </section>
 
@@ -208,8 +213,15 @@ export default async function WalletPage({
                     after that.
                   </li>
                   <li>
-                    · Airtel settles on the spot; MTN confirms seconds later. A declined payout is
-                    returned to your balance immediately.
+                    · Platform payout fee {feePercent}% is cut from the withdrawal — you are paid
+                    the net.
+                  </li>
+                  <li>
+                    ·{" "}
+                    {manualPayouts
+                      ? "payouts run through the desk right now: an operator pays your number directly and confirms it"
+                      : "Airtel settles on the spot; MTN confirms seconds later. A declined payout is returned to your balance immediately"}
+                    .
                   </li>
                 </ul>
                 {openPayouts.length > 0 && (

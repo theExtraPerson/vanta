@@ -203,6 +203,7 @@ create table if not exists public.withdrawals (
   id          uuid primary key default gen_random_uuid(),
   user_id     uuid not null references public.profiles (id) on delete cascade,
   amount      numeric(14, 2) not null check (amount >= 5000),
+  fee         numeric(14, 2) not null default 0,
   method      text not null default 'MTN MoMo',
   destination text not null,
   msisdn      text,
@@ -442,6 +443,7 @@ alter table public.withdrawals add column if not exists gateway_state   text;
 alter table public.withdrawals add column if not exists failure_code    text;
 alter table public.withdrawals add column if not exists failure_message text;
 alter table public.withdrawals add column if not exists charge          numeric(14, 2);
+alter table public.withdrawals add column if not exists fee             numeric(14, 2) not null default 0;
 alter table public.withdrawals add column if not exists settled_at      timestamptz;
 alter table public.withdrawals add column if not exists reference       text default '' not null;
 

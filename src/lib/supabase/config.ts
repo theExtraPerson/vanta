@@ -59,6 +59,13 @@ export const earningsMatureAt = process.env.NEXT_PUBLIC_EARNINGS_MATURE_AT ?? "2
 export const withdrawalOpensAt = process.env.NEXT_PUBLIC_WITHDRAWAL_OPENS ?? "09:00";
 export const withdrawalClosesAt = process.env.NEXT_PUBLIC_WITHDRAWAL_CLOSES ?? "22:00";
 
+/**
+ * Platform fee cut from every withdrawal before the member is paid (percent).
+ * The live value comes from the withdrawal_fee_percent setting; this mirror
+ * only seeds the form hint before the rules round-trip.
+ */
+export const withdrawalFeePercent = Number(process.env.NEXT_PUBLIC_WITHDRAWAL_FEE_PERCENT ?? 16);
+
 /* ── Shashura mobile-money gateway (server only) ─────────────────────────────
  * https://shashura.com/developers — collections (requestToPay) and payouts
  * (disburse). Secrets stay on the server: none of these are NEXT_PUBLIC_.

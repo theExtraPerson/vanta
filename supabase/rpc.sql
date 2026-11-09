@@ -38,16 +38,19 @@ as $$
 $$;
 
 -- When day p_index (0-based) of a cycle opened at p_started_at becomes payable:
--- 22:00 on the corresponding local calendar day.
+-- Day N of a cycle matures at the platform's earnings hour — the
+-- earnings_mature_at setting (published default 22:00 Kampala), so the desk can
+-- move the release time without a code change. Was a hardcoded 22 hours.
 create or replace function public.vanta_maturity_at(p_started_at timestamptz, p_index integer)
 returns timestamptz
 language sql
-immutable
+stable
+set search_path = public
 as $$
   select (
     (date_trunc('day', p_started_at at time zone 'Africa/Kampala')
        + make_interval(days => p_index)
-       + interval '22 hours')
+       + (public.vanta_setting_text('earnings_mature_at', '22:00'))::interval
     at time zone 'Africa/Kampala'
   );
 $$;
@@ -146,6 +149,8 @@ begin
     'earnings_mature_at',    public.vanta_setting_text('earnings_mature_at', '22:00'),
     'withdrawal_opens_at',   public.vanta_setting_text('withdrawal_opens_at', '09:00'),
     'withdrawal_closes_at',  public.vanta_setting_text('withdrawal_closes_at', '22:00'),
+    'withdrawal_fee_percent', public.vanta_setting_number('withdrawal_fee_percent', 16),
+    'withdrawal_mode',       coalesce(nullif(lower(public.vanta_setting_text('withdrawal_mode', 'api')), ''), 'api'),
     'withdrawals_open',      public.vanta_within_withdrawal_window()
   );
 exception when others then
@@ -155,6 +160,7 @@ exception when others then
     'min_deposit', 10000, 'min_withdrawal', 5000,
     'earnings_mature_at', '22:00',
     'withdrawal_opens_at', '09:00', 'withdrawal_closes_at', '22:00',
+    'withdrawal_fee_percent', 16, 'withdrawal_mode', 'api',
     'withdrawals_open', public.vanta_local_now()::time >= time '09:00'
                          and public.vanta_local_now()::time < time '22:00'
   );
@@ -865,7 +871,10 @@ revoke all on function public.vanta_fail_disbursement(uuid, text, text, text)
   from public, anon, authenticated;
 
 -- Opens a payout: rules first, then the hold, then the reference the app
--- sends to /disburse.
+-- sends to /disburse. The platform fee (withdrawal_fee_percent, default 16%)
+-- is cut here so the member is paid the net, and the withdrawal carries the
+-- route the desk chose: 'api' lets the app push /disburse, 'manual' leaves it
+-- pending for an operator to pay the member directly and mark it settled.
 create or replace function public.vanta_start_withdrawal(
   p_amount numeric,
   p_msisdn text,
@@ -883,6 +892,10 @@ declare
   v_wd      public.withdrawals%rowtype;
   v_ref     text;
   v_min     numeric;
+  v_pct     numeric;
+  v_fee     numeric(14, 2);
+  v_net     numeric(14, 2);
+  v_mode    text;
 begin
   if v_uid is null then
     raise exception 'NOT_AUTHENTICATED';
@@ -923,14 +936,23 @@ begin
     raise exception 'INSUFFICIENT_BALANCE: available %', v_balance;
   end if;
 
+  -- fee and payout route, both admin-editable at runtime
+  v_pct  := public.vanta_setting_number('withdrawal_fee_percent', 16);
+  v_fee  := trunc(p_amount * v_pct / 100, 2);
+  v_net  := p_amount - v_fee;
+  v_mode := lower(coalesce(public.vanta_setting_text('withdrawal_mode', 'api'), 'api'));
+  if v_mode not in ('api', 'manual') then
+    v_mode := 'api';
+  end if;
+
   -- hold the funds while the payout is in flight
   update public.profiles
      set balance = balance - p_amount
    where id = v_uid;
 
-  insert into public.withdrawals (user_id, amount, method, destination, msisdn, status)
+  insert into public.withdrawals (user_id, amount, fee, method, destination, msisdn, status)
   values (
-    v_uid, p_amount,
+    v_uid, p_amount, v_fee,
     coalesce(nullif(trim(p_method), ''), 'MTN MoMo'),
     v_number, v_number,
     'pending'
@@ -947,14 +969,21 @@ begin
     p_amount,
     'pending',
     v_ref,
-    coalesce(nullif(trim(p_method), ''), 'MTN MoMo') || ' · ' || v_number || ' · processing',
-    jsonb_build_object('withdrawal_id', v_wd.id, 'channel', 'shashura')
+    coalesce(nullif(trim(p_method), ''), 'MTN MoMo') || ' · ' || v_number
+      || ' · fee ' || to_char(v_fee, 'FM999,999,999')
+      || ' · pays ' || to_char(v_net, 'FM999,999,999')
+      || case when v_mode = 'manual' then ' · desk payout' else ' · processing' end,
+    jsonb_build_object('withdrawal_id', v_wd.id, 'channel', v_mode,
+                       'fee', v_fee, 'net', v_net)
   );
 
   return jsonb_build_object(
     'withdrawal_id', v_wd.id,
     'reference',     v_ref,
     'amount',        v_wd.amount,
+    'fee',           v_fee,
+    'net_amount',    v_net,
+    'mode',          v_mode,
     'msisdn',        v_number,
     'method',        v_wd.method
   );

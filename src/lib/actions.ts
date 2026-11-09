@@ -367,10 +367,13 @@ export async function depositAction(
 }
 
 /**
- * Withdrawal = SHASHURA disbursement. The RPC checks the rules (5,000 UGX
- * minimum, 09:00–22:00 EAT window) and holds the money, then /disburse pushes
- * it. Airtel settles on the response; MTN settles on the callback, and any
- * failure puts the hold back in the wallet.
+ * Withdrawal. The RPC checks the rules, cuts the platform fee
+ * (withdrawal_fee_percent, published default 16%) and holds the gross amount.
+ * Then the route depends on the admin's withdrawal_mode setting:
+ * - "api"    → SHASHURA disbursement of the net. Airtel settles on the
+ *   response; MTN settles on the callback; any failure returns the hold.
+ * - "manual" → nothing is pushed. The request stays pending on the payout
+ *   desk, an operator pays the member directly and marks it settled.
  */
 export async function withdrawAction(
   _prev: ActionState | undefined,
@@ -401,8 +404,23 @@ export async function withdrawAction(
     withdrawal_id: string;
     reference: string;
     amount: number;
+    fee?: number;
+    net_amount?: number;
+    mode?: string;
     msisdn: string;
   };
+  const fee = request.fee ?? 0;
+  const net = request.net_amount ?? request.amount;
+
+  // Manual desk route: no gateway call. The hold stays held, the request
+  // waits in the payout queue and the operator settles it after paying.
+  if (request.mode === "manual") {
+    revalidateWallet();
+    return {
+      ok: true,
+      message: `${ugx(net)} is queued for the payout desk (fee ${ugx(fee)} already cut). An operator will pay ${request.msisdn} directly and confirm it here.`,
+    };
+  }
 
   if (!isPaymentsConfigured) {
     await rpcAsAdmin("vanta_set_withdrawal_gateway", {
@@ -420,7 +438,7 @@ export async function withdrawAction(
   try {
     const pushed = await disburse({
       msisdn: request.msisdn,
-      amount: request.amount,
+      amount: net,
       reference: request.reference,
       remarks: `Vanta withdrawal ${request.reference}`,
     });
@@ -439,13 +457,13 @@ export async function withdrawAction(
     if (state === "TS") {
       return {
         ok: true,
-        message: `${ugx(request.amount)} paid out to ${request.msisdn}.`,
+        message: `${ugx(net)} paid out to ${request.msisdn} (fee ${ugx(fee)} cut).`,
       };
     }
 
     return {
       ok: true,
-      message: `${ugx(request.amount)} is on its way to ${request.msisdn}. ${
+      message: `${ugx(net)} is on its way to ${request.msisdn}. ${
         pushed.message ?? "We confirm it as soon as the network replies."
       }`,
     };
